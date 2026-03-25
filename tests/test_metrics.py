@@ -9,8 +9,8 @@ import os
 import numpy as np
 import pytest
 
-from pvoros import voros_score, pvoros_score, make_pvoros_scorer
-from pvoros import _geometry
+from metrics import voros_score, pvoros_score, make_pvoros_scorer
+import _geometry
 
 
 # ---- Synthetic data fixture ----

@@ -5,19 +5,12 @@ real MIMIC-IV prediction CSVs stored in pvoros/tests/fixtures/.
 """
 
 import os
-import sys
 import numpy as np
 import pytest
 
-from pvoros import recall_cost, pauroc_cost, pvoros_cost, voros_cost
-from pvoros import _geometry
-from pvoros.cost import _fpr_tpr_at_thresholds
-
-# For replication against step7 output
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-_SRC = os.path.join(_ROOT, 'src')
-if _SRC not in sys.path:
-    sys.path.insert(0, _SRC)
+from cost import recall_cost, pauroc_cost, pvoros_cost, voros_cost
+import _geometry
+from cost import _fpr_tpr_at_thresholds
 
 
 # ---- Synthetic val/test fixtures ----

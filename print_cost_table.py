@@ -16,8 +16,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from pvoros import pvoros_cost, recall_cost, voros_cost, pauroc_cost
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cost import pvoros_cost, recall_cost, voros_cost, pauroc_cost
 
 # ---- Config ----
 

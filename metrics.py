@@ -9,7 +9,7 @@ These functions follow a scikit-learn-compatible interface:
 import numpy as np
 from sklearn.metrics import roc_curve
 
-from . import _geometry
+import _geometry
 
 
 def voros_score(y_true, y_pred, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000):

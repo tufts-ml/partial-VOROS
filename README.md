@@ -127,6 +127,7 @@ pip install -r requirements.txt
 ```
 
 ## Running tests
+Full test suite may take 8 minutes.
 
 ```bash
 pytest pvoros/tests/
