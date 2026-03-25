@@ -151,8 +151,6 @@ venv.bak/
 .mypy_cache/
 
 # Custom
-*.csv
-!pvoros/tests/fixtures/*.csv
 *.png
 *.html
 *.pdf

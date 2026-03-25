@@ -14,7 +14,7 @@ These metrics are designed for clinical decision support settings where deployab
 ## Structure
 
 ```
-pvoros/
+./
 ├── metrics.py          # VOROS/pVOROS scoring functions (scikit-learn compatible)
 ├── cost.py             # Cost functions: threshold selected on val, cost evaluated on test
 ├── print_cost_table.py # Reproduce Table X from the paper
@@ -31,7 +31,7 @@ pvoros/
 scikit-learn-compatible scoring functions. Use these to compare models during training/validation.
 
 ```python
-from pvoros import voros_score, pvoros_score, make_pvoros_scorer
+from metrics import voros_score, pvoros_score, make_pvoros_scorer
 
 # Full VOROS (no constraints)
 score = voros_score(y_true, y_pred, min_fp_cost_ratio=1/9, max_fp_cost_ratio=1/6)
@@ -54,7 +54,7 @@ score = scorer(y_true, y_pred)
 For comparing model-selection strategies. Each function selects a threshold on a held-out validation set and evaluates expected cost on a test set, averaged over the cost-ratio range.
 
 ```python
-from pvoros import recall_cost, pauroc_cost, pvoros_cost, voros_cost
+from cost import recall_cost, pauroc_cost, pvoros_cost, voros_cost
 
 # Shared signature:
 cost = pvoros_cost(y_true_val, y_pred_val,
@@ -82,7 +82,7 @@ Polygon clipping (Sutherland-Hodgman), reduced area computation over the feasibl
 Runs all four cost calculation strategies across MIMIC-IV and eICU scenarios using saved labels and predictions and prints a formatted comparison table.
 
 ```bash
-python pvoros/print_cost_table.py
+python print_cost_table.py
 ```
 
 Expected output:
@@ -130,5 +130,5 @@ pip install -r requirements.txt
 Full test suite may take 8 minutes.
 
 ```bash
-pytest pvoros/tests/
-```
+pytest tests/
+``` 
