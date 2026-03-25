@@ -345,10 +345,14 @@ def voros(
             n_points=n_points,
         )
 
-    dx = (ts[-1] - ts[0]) / n_points if len(ts) > 1 else 0.0
-    vor = float(np.trapz(max_points, dx=dx)) if len(ts) > 1 else (max_points[0] if max_points else 0.0)
-    coeff = 1 / (ts[-1] - ts[0]) if len(ts) > 1 and (ts[-1] - ts[0]) != 0 else 1.0
-    vor = vor * coeff
+    # Integrate in r-space (cost-ratio space) where we have uniform sampling.
+    # The expectation is E_{r ~ Uniform}[f(r)] = (1/(r_max - r_min)) * integral f(r) dr.
+    fp_cost_ratios = np.linspace(min_fp_cost_ratio, max_fp_cost_ratio, n_points)
+    r_range = max_fp_cost_ratio - min_fp_cost_ratio
+    if len(fp_cost_ratios) > 1 and r_range > 0:
+        vor = float(np.trapz(max_points, x=fp_cost_ratios)) / r_range
+    else:
+        vor = float(max_points[0]) if max_points else 0.0
     if return_best_thresholds:
         return vor, np.array(ts, dtype=float), np.array(best_thresholds, dtype=float)
     return vor
