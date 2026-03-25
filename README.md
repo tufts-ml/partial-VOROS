@@ -103,15 +103,16 @@ Violation codes: `OK` = no constratints violated, `prec` = precision constraint 
 ## Installation
 
 All dependencies are listed in `requirements.txt` (`numpy`, `scikit-learn`, `pandas`, `pytest`).
+Below are instructions for popular Python environment managers
 
-**pip + venv (standard)**
+**pip + venv**
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-**uv (fast drop-in for pip)**
+**uv**
 ```bash
 uv venv
 source .venv/bin/activate
