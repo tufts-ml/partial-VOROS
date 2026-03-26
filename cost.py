@@ -54,7 +54,7 @@ def _roc(y_true, proba):
 
 def recall_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
                 alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000,
-                return_test_operating_points=False):
+                return_test_operating_points=False, **unused_kwargs):
     """Expected test cost using the best-recall threshold selected on validation.
 
     From the constraint-feasible validation thresholds, selects the one that
@@ -129,7 +129,7 @@ def recall_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
 
 def pauroc_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
                 alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000,
-                return_test_operating_points=False):
+                return_test_operating_points=False, **unused_kwargs):
     """Expected test cost for a model selected by partial AUROC.
 
     Computes cost the same way as recall_cost: selects the best-recall
@@ -168,8 +168,10 @@ def pauroc_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
 
 
 def pvoros_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
-                alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000,
-                return_test_operating_points=False):
+                alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio,
+                n_points=1000,
+                return_test_operating_points=False,
+                do_fast_threshold_sel_via_cost=False):
     """Expected test cost using pVOROS-optimal thresholds.
 
     At each cost ratio r in the grid, selects the threshold on validation
@@ -234,6 +236,7 @@ def pvoros_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
         acc_fprs_v, acc_tprs_v, kappa, alpha, P_v, N_v,
         min_fp_cost_ratio, max_fp_cost_ratio, n_points=n_points,
         return_best_thresholds=True, thresholds=acc_thrs_v,
+        do_fast_threshold_sel_via_cost=do_fast_threshold_sel_via_cost,
     )
     rs_list = np.linspace(min_fp_cost_ratio, max_fp_cost_ratio, num=len(ts_arr))
     best_thr_np = np.asarray(best_thr_arr, dtype=float)
@@ -252,8 +255,10 @@ def pvoros_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
 
 
 def voros_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
-               alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000,
-               return_test_operating_points=False):
+               alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio,
+               n_points=1000,
+               return_test_operating_points=False,
+               do_fast_threshold_sel_via_cost=False):
     """Expected test cost using pVOROS-optimal thresholds (VOROS model selection).
 
     Identical to pvoros_cost in every way. The distinction is in MODEL SELECTION:
@@ -285,4 +290,5 @@ def voros_cost(y_true_val, y_pred_val, y_true_test, y_pred_test,
         y_true_val, y_pred_val, y_true_test, y_pred_test,
         alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio,
         n_points=n_points, return_test_operating_points=return_test_operating_points,
+        do_fast_threshold_sel_via_cost=do_fast_threshold_sel_via_cost,
     )
