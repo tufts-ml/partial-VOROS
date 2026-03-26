@@ -13,6 +13,7 @@ Fixture files must exist under pvoros/tests/fixtures/.
 
 import os
 import sys
+import time
 import numpy as np
 import pandas as pd
 
@@ -91,7 +92,7 @@ def _constraint_violation_str(fprs_t, tprs_t, alpha, kappa_frac, P_t, N_t):
     return "OK"
 
 
-def compute_cell(dataset, scenario, strategy):
+def compute_cell(dataset, scenario, strategy, **hypers):
     """Return (cost_str, violation_str), or ('N/A', '') if fixture is missing."""
     key = (dataset, scenario, strategy)
     files = FIXTURES_MAP.get(key)
@@ -107,6 +108,7 @@ def compute_cell(dataset, scenario, strategy):
     cost, fprs_t, tprs_t = fn(
         yv, pv, yt, pt, **params,
         return_test_operating_points=True,
+        **hypers,
     )
 
     P_t = int(np.sum(yt == 1))
@@ -114,36 +116,45 @@ def compute_cell(dataset, scenario, strategy):
     viol = _constraint_violation_str(fprs_t, tprs_t,
                                      params['alpha'], params['kappa_frac'],
                                      P_t, N_t)
-    return f"{cost:.3f}", viol
+    return f"{cost:.5f}", viol
 
 
 # ---- Main ----
 
-def main():
-    cell_w = 19  # wide enough for "0.261 (prec+cap)" + padding
+def main(
+        do_fast_threshold_sel_via_cost=True,
+        n_points=1000,
+    ):
+    cell_w = 21  # wide enough for "0.26112 (prec+cap)" + padding
     row_label_w = 12
 
     header = f"{'Strategy':<{row_label_w}}" + "".join(
         f"{COLUMN_LABELS[c]:>{cell_w}}" for c in COLUMNS
     )
     sep = "-" * len(header)
+
+    hypers = {'do_fast_threshold_sel_via_cost':do_fast_threshold_sel_via_cost,
+              'n_points':n_points}
+
     print(sep)
     print(header)
     print(sep)
-
+    start_time = time.time()
     for strategy in STRATEGIES:
         row = f"{STRATEGY_LABELS[strategy]:<{row_label_w}}"
         for col in COLUMNS:
             dataset, scenario = col
-            cost_str, viol = compute_cell(dataset, scenario, strategy)
+            cost_str, viol = compute_cell(dataset, scenario, strategy, **hypers)
             if cost_str == 'N/A':
                 cell = 'N/A'
             else:
                 cell = f"{cost_str} ({viol})"
             row += f"{cell:>{cell_w}}"
         print(row)
-
     print(sep)
+    stop_time = time.time()
+    print("Elapsed time  %8.2f sec" % (stop_time - start_time))
+    print("With settings:", hypers)
 
 
 if __name__ == '__main__':
