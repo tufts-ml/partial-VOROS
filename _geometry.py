@@ -7,6 +7,7 @@ src/step7_lucky_number.py for use by metrics.py and cost.py.
 """
 
 import numpy as np
+import scipy.integrate
 from typing import Optional
 
 
@@ -271,6 +272,12 @@ def t_to_ratio(t: float, P: int, N: int) -> float:
     return (float(P) / float(N)) * (t / (1.0 - t))
 
 
+def calc_cost(t_G, fpr_G, tpr_G):
+    cost_G = t_G * fpr_G + (1.0 - t_G) * (1.0 - tpr_G)
+    assert cost_G.max() <= 1.0
+    assert cost_G.min() >= 0.0
+    return cost_G
+
 # ---- Max reduced area per cost ratio ----
 
 def max_area_per_t(
@@ -285,6 +292,7 @@ def max_area_per_t(
     n_points: int = 1000,
     return_best_thresholds: bool = False,
     thresholds: Optional[np.ndarray] = None,
+    do_fast_threshold_sel_via_cost=False,
 ):
     """Calculate the maximum reduced area across ROC points for each cost ratio in a range.
 
@@ -299,11 +307,21 @@ def max_area_per_t(
     # for each fp_cost_ratio, calculate reduced area for all fpr,tpr pairs
     max_points = []
     best_thresh = [] if return_best_thresholds else None
-    for fp_ratio in fp_cost_ratios:
-        vals = [reduced_area(fpr, tpr, κ, α, P, N, fp_ratio) for fpr, tpr in zip(fprs, tprs)]
-        # find argmax
-        imax = int(np.argmax(vals)) if len(vals) else -1
-        max_points.append(vals[imax] if imax >= 0 else 0.0)
+    for fp_ratio, t in zip(fp_cost_ratios, ts):
+        if do_fast_threshold_sel_via_cost:
+            costs = calc_cost(t, fprs, tprs)
+            if len(costs) > 0:
+                imax = int(np.argmin(costs))
+                bestarea = reduced_area(fprs[imax], tprs[imax], κ, α, P, N, fp_ratio)
+                max_points.append(bestarea)
+            else:
+                imax = -1
+                max_points.append(0.0) 
+        else:
+            vals = [reduced_area(fpr, tpr, κ, α, P, N, fp_ratio) for fpr, tpr in zip(fprs, tprs)]
+            # find argmax
+            imax = int(np.argmax(vals)) if len(vals) else -1
+            max_points.append(vals[imax] if imax >= 0 else 0.0)
         if return_best_thresholds:
             if thresholds is None:
                 raise ValueError("thresholds must be provided when return_best_thresholds=True")
@@ -327,6 +345,7 @@ def voros(
     n_points: int = 1000,
     return_best_thresholds: bool = False,
     thresholds: Optional[np.ndarray] = None,
+    do_fast_threshold_sel_via_cost=False,
 ):
     """Compute partial VOROS (average of max reduced area across t in range).
 
@@ -338,17 +357,23 @@ def voros(
         max_points, ts, best_thresholds = max_area_per_t(
             fprs, tprs, κ, α, P, N, min_fp_cost_ratio, max_fp_cost_ratio,
             n_points=n_points, return_best_thresholds=True, thresholds=thresholds,
+            do_fast_threshold_sel_via_cost=do_fast_threshold_sel_via_cost,
         )
     else:
         max_points, ts = max_area_per_t(
             fprs, tprs, κ, α, P, N, min_fp_cost_ratio, max_fp_cost_ratio,
-            n_points=n_points,
+            n_points=n_points, do_fast_threshold_sel_via_cost=do_fast_threshold_sel_via_cost,
         )
 
-    dx = (ts[-1] - ts[0]) / n_points if len(ts) > 1 else 0.0
-    vor = float(np.trapz(max_points, dx=dx)) if len(ts) > 1 else (max_points[0] if max_points else 0.0)
-    coeff = 1 / (ts[-1] - ts[0]) if len(ts) > 1 and (ts[-1] - ts[0]) != 0 else 1.0
-    vor = vor * coeff
+    # Integrate in r-space (cost-ratio space) where we have uniform sampling.
+    # The expectation is E_{r ~ Uniform}[f(r)] = (1/(r_max - r_min)) * integral f(r) dr.
+    fp_cost_ratios = np.linspace(min_fp_cost_ratio, max_fp_cost_ratio, n_points)
+    r_range = max_fp_cost_ratio - min_fp_cost_ratio
+    if len(fp_cost_ratios) > 1 and r_range > 0:
+        integral_val = scipy.integrate.trapezoid(max_points, x=fp_cost_ratios)
+        vor = float(integral_val) / r_range
+    else:
+        vor = float(max_points[0]) if max_points else 0.0
     if return_best_thresholds:
         return vor, np.array(ts, dtype=float), np.array(best_thresholds, dtype=float)
     return vor
