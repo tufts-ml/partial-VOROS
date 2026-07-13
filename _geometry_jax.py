@@ -8,20 +8,61 @@ from typing import Optional
 
 
 def area(polygon_points):
-    # expects polygon_points to be a jnp.array or np.array
-    """Shoelace area for a polygon stored as (MAX_VERTS,2) with n valid leading vertices."""
-    if polygon_points is None or len(polygon_points) < 3:
+    if polygon_points.shape[0] == 0:
         return 0.0
-    x = polygon_points[:, 0]
-    y = polygon_points[:, 1]
-    # Use jnp.roll to shift arrays to get the 'next' vertices
-    x_next = jnp.roll(x, -1)
-    y_next = jnp.roll(y, -1)
     
-    # Vectorized shoelace evaluation
-    shoelace_sum = jnp.sum(x * y_next - y * x_next)
+    # 1. Filter out empty polygon markers if the polygon completely disappeared
+    is_nan = jnp.isnan(polygon_points[:, 0])
+    clean_poly = jnp.where(is_nan[:, None], 0.0, polygon_points)
     
-    return shoelace_sum / 2.0
+    # 2. Identify and keep only the truly UNIQUE consecutive vertices.
+    # We compare each row with its preceding neighbor.
+    diffs = jnp.abs(clean_poly - jnp.roll(clean_poly, 1, axis=0))
+    is_unique_edge = jnp.any(diffs > 1e-5, axis=1)
+    
+    # 3. Pull out ONLY the valid unique coordinates
+    # Non-unique duplicate rows collapse cleanly into (0.0, 0.0)
+    valid_vertices = jnp.where(is_unique_edge[:, None], clean_poly, 0.0)
+    
+    # 4. Compute the geometric center (centroid) of the unique shape boundaries
+    num_valid = jnp.sum(is_unique_edge)
+    cx = jnp.sum(valid_vertices[:, 0]) / (num_valid + 1e-15)
+    cy = jnp.sum(valid_vertices[:, 1]) / (num_valid + 1e-15)
+    
+    # 5. Sort indices counter-clockwise relative to the center.
+    # This guarantees a perfect sequential perimeter loop for the Shoelace math.
+    angles = jnp.arctan2(valid_vertices[:, 1] - cy, valid_vertices[:, 0] - cx)
+    # Force unused padding points to a high dummy angle so they cluster at the end
+    sorted_angles = jnp.where(is_unique_edge, angles, 5.0)
+    
+    sorted_idx = jnp.argsort(sorted_angles)
+    ordered_poly = valid_vertices[sorted_idx]
+    
+    # 6. Apply Shoelace formula exclusively within the valid boundary segment.
+    # Instead of rolling across the whole matrix (which includes the 0,0 padding tail),
+    # we roll only across the active unique vertices.
+    x = ordered_poly[:, 0]
+    y = ordered_poly[:, 1]
+    
+    # Standard vector cross products
+    term1 = x * jnp.roll(y, -1)
+    term2 = y * jnp.roll(x, -1)
+    
+    # Zero-out terms associated with the padded indices at the end of the array
+    # because they do not form structural parts of the polygon perimeter
+    padded_mask = (jnp.arange(polygon_points.shape[0]) < num_valid)
+    raw_area = 0.5 * jnp.abs(jnp.sum(jnp.where(padded_mask, term1 - term2, 0.0)))
+    
+    # Handle the boundary edge closure loop from the last unique vertex back to the first
+    first_pt = ordered_poly[0]
+    # Use dynamic gathering to extract the last unique vertex index safely
+    last_pt = ordered_poly[jnp.clip(num_valid - 1, 0, polygon_points.shape[0] - 1)]
+    closure_term = 0.5 * jnp.abs(last_pt[0] * first_pt[1] - last_pt[1] * first_pt[0])
+    
+    # If the polygon had less than 3 unique vertices, the real area is 0.0
+    final_area = jnp.where(num_valid < 3, 0.0, raw_area + closure_term)
+    
+    return jnp.where(jnp.any(is_nan), 0.0, final_area)
 
 # ---- Sutherland-Hodgman clipping ----
 
@@ -31,7 +72,6 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     Returns new list of vertices (may be empty).
     """
 
-    # TODO BUG sometimes returns points not in clipping anymore
     N = poly.shape[0]
     
     curr_pts = poly
@@ -50,23 +90,37 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     t = jnp.clip(v_curr / safe_denom, 0.0, 1.0)
     intersections = curr_pts + t[:, None] * (next_pts - curr_pts)
     
-    # --- STRICT CASE ASSIGNMENTS ---
-    # Slot A logic:
-    # If the edge crossed, we MUST output the intersection point.
-    # If it didn't cross and is inside, keep next_pt.
-    # If it didn't cross and is completely outside, clip it to the intersection point.
+    # --- EDGE CONDITIONAL ASSIGNMENTS ---
     crossed = (curr_inside != next_inside)
-    pt_A = jnp.where(crossed[:, None], intersections, 
-                     jnp.where(next_inside[:, None], next_pts, intersections))
+    pt_A = jnp.where(crossed[:, None], intersections, next_pts)
     
-    # Slot B logic:
-    # Only unique when entering the shape (Outside -> Inside), where it equals next_pt.
-    # Otherwise, it matches pt_A completely to create a zero-area duplicate.
     use_next_B = (~curr_inside) & next_inside
     pt_B = jnp.where(use_next_B[:, None], next_pts, pt_A)
     
-    # Interleave into the static shape array
-    final_poly = jnp.stack([pt_A, pt_B], axis=1).reshape(2 * N, 2)
+    # Interleave to build initial fixed array shape (2*N, 2)
+    output = jnp.stack([pt_A, pt_B], axis=1).reshape(2 * N, 2)
+    
+    # Check if the entire shape has been completely wiped out
+    any_survived = jnp.any(curr_inside)
+    
+    # Extract anchor point safely if something is inside
+    first_inside_idx = jnp.argmax(curr_inside)
+    dynamic_safe_anchor = jnp.where(any_survived, poly[first_inside_idx], poly[0])
+    
+    # Re-evaluate the final generated positions against the current plane
+    v_out = a * output[:, 0] + b * output[:, 1] - c
+    is_outside = v_out > 1e-6
+    
+    # Snap outside noise to our anchor point
+    clipped_poly = jnp.where(is_outside[:, None], dynamic_safe_anchor, output)
+    
+    # --- EMPTY OBLITERATION STEP ---
+    # If absolutely nothing survived this clip or any previous clip (contains NaN),
+    # force the entire matrix to evaluate to a safe NaN marker block.
+    has_nan = jnp.any(jnp.isnan(poly))
+    is_still_valid = any_survived & (~has_nan)
+    
+    final_poly = jnp.where(is_still_valid, clipped_poly, jnp.nan)
     
     return final_poly
 
@@ -77,93 +131,144 @@ def _intersect_halfplanes(halfplanes, bbox=((0, 0), (1, 1))):
     Returns list of vertices of resulting convex polygon in order.
     """
     (x0, y0), (x1, y1) = bbox
-    poly = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
-    for (a, b, c) in halfplanes:
+    
+    # 1. Initialize our starting box as a JAX array
+    # We must explicitly pad/over-allocate the array size upfront.
+    # Each half-plane clip can potentially double the number of slots needed.
+    # For M half-planes, starting with 4 vertices, a safe allocation size is 4 * (2**M),
+    # or you can set a safe maximum upper bound (e.g., 32 or 64 slots) depending on M.
+    M = halfplanes.shape[0]
+    max_vertices = 4 * (2 ** M)  
+    
+    # Start with a pristine CCW square, padded with duplicate coordinates
+    poly = jnp.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=jnp.float32)
+    # poly = jnp.tile(init_poly, (2 ** M, 1)) 
+    
+    # 2. Sequentially apply each halfplane step using jax.lax.fori_loop 
+    # or a standard Python loop (Python loops are perfectly fine here because 
+    # M, the number of half-planes, is a static structural property)
+    for i in range(M):
+        a = halfplanes[i, 0]
+        b = halfplanes[i, 1]
+        c = halfplanes[i, 2]
         poly = _clip_polygon_with_halfplane(poly, a, b, c)
-        if not poly:
-            break
-    # sort vertices counter-clockwise for consistency
-    if len(poly) > 2:
-        cx = sum(p[0] for p in poly) / len(poly)
-        cy = sum(p[1] for p in poly) / len(poly)
-        poly.sort(key=lambda p: np.arctan2(p[1] - cy, p[0] - cx))
+        
     return poly
 
 
 # ---- Feasible region polygon ----
 
 def compute_total_region_polygon(P, N, α, κ):
-    """Compute polygon of feasible region defined by:
-    precision constraint: TP/(TP+FP) >= α -> y >= (α*N/( (1-α)*P)) x (derived earlier)
-    written as y >= m_p x, where m_p = α*N/((1-α)*P)
-    capacity constraint: predicted positives <= κ -> P*y + N*x <= κ -> N*x + P*y <= κ
-    bounding box: 0 <= x <= 1, 0 <= y <= 1 (ROC space)
-    Returns list of vertices.
-    Handles all geometric cases automatically via half-plane intersection.
     """
-    if not (0 < α < 1):
-        raise ValueError("α must be in (0,1)")
-    if not (0 < κ):
-        raise ValueError("κ must be > 0")
-    m_p = (α * N) / ((1 - α) * P)
-    # Half-planes a*x + b*y <= c
-    halfplanes = []
-    # y >= m_p x  -> -m_p x + y >= 0 -> m_p x - y <= 0
-    halfplanes.append((m_p, -1.0, 0.0))
-    # capacity N*x + P*y <= κ (only if kappa < P+N; else it's non-binding inside ROC square)
-    if κ < (P + N):
-        halfplanes.append((N, P, κ))
-    # x >= 0 -> -x <= 0
-    halfplanes.append((-1.0, 0.0, 0.0))
-    # y <= 1
-    halfplanes.append((0.0, 1.0, 1.0))
-    # x <= 1
-    halfplanes.append((1.0, 0.0, 1.0))
-    # y >= 0 -> -y <= 0
-    halfplanes.append((0.0, -1.0, 0.0))
-    poly = _intersect_halfplanes(halfplanes)
-    # Deduplicate near-identical consecutive or global duplicates
-    dedup = []
-    for pt in poly:
-        if not any(abs(pt[0] - q[0]) < 1e-12 and abs(pt[1] - q[1]) < 1e-12 for q in dedup):
-            dedup.append(pt)
-    return dedup
+    Compute polygon of the feasible region in ROC space.
+    Fully compatible with jax.grad.
+    
+    Parameters:
+    P, N: Total positives and negatives (scalars/floats)
+    α: Precision threshold in (0, 1)
+    κ: Capacity threshold > 0
+    
+    Returns:
+    jax.Array: Fixed-size padded polygon array
+    """
+    m_p = (α * N) / ((1.0 - α) * P)
+    
+    # 1. Define the 5 core boundaries that are always active
+    # Format: [a, b, c] for ax + by <= c
+    h0 = jnp.array([m_p, -1.0, 0.0])   # precision constraint: y >= m_p * x
+    # h1 = jnp.array([-1.0, 0.0, 0.0])  # x >= 0
+    # h2 = jnp.array([0.0, 1.0, 1.0])   # y <= 1
+    # h3 = jnp.array([1.0, 0.0, 1.0])   # x <= 1
+    # h4 = jnp.array([0.0, -1.0, 0.0])  # y >= 0
+    
+    # 2. Handle the conditional capacity constraint: N*x + P*y <= kappa
+    # JAX must trace all paths, so we evaluate the constraint plane anyway.
+    # If kappa >= P + N, it's non-binding, so we substitute a dummy plane 
+    # that sits entirely outside the ROC square (e.g., 0*x + 0*y <= 1.0)
+    capacity_plane = jnp.array([N, P, κ])
+    dummy_plane = jnp.array([0.0, 0.0, 1.0])
+    
+    h_cap = jnp.where(κ < (P + N), capacity_plane, dummy_plane)
+    
+    # 3. Stack into a single static matrix (6 half-planes total)
+    halfplanes = jnp.stack([h0, h_cap], axis=0)
+    
+    # 4. Intersect the halfplanes inside the standard ROC box [0,1]x[0,1]
+    # This returns a static, padded array where duplicate points are clean
+    # zero-area lines that don't disrupt downstream math.
+    poly = _intersect_halfplanes(halfplanes, bbox=((0.0, 0.0), (1.0, 1.0)))
+    
+    return poly
 
 
 def total_region_area(P, N, α, κ):
+    # 1. Compute the padded polygon matrix
     poly = compute_total_region_polygon(P, N, α, κ)
-    if not poly:
-        return 0.0, poly
-    return abs(area(poly)), poly
+    
+    # 2. Check if the polygon is empty (contains NaNs)
+    is_empty = jnp.any(jnp.isnan(poly))
+    
+    # 3. Compute the area using your JAX area function
+    calculated_area = jnp.abs(area(poly))
+    
+    # 4. Use jnp.where to conditionally assign the final area value.
+    # If it is empty, the area is 0.0, otherwise use the calculated area.
+    final_area = jnp.where(is_empty, 0.0, calculated_area)
+    
+    return final_area, poly
 
 
 # ---- Isoperformance line ----
 
 def _iso_performance_line(h, k, t):
-    """Return coefficients (a,b,c) for half-plane a*x + b*y <= c representing the lower-cost side
-    of the isoperformance line passing through (h,k).
-    Cost line derived from total expected cost = const. For now we use linearization:
-    k - y = ((k-1 + (1-k)/t) - (h - x)) * ( (k - 1) / (h - (h+k-1+(1-k)/t)) )
-    Simpler: we know another point where iso hits y=1: x_iso1 = h+k-1+(1-k)/t.
-    Treat line through (h,k) and (x_iso1,1).
-    Returns line in normalized form a*x + b*y = c with orientation such that region 'below' (toward origin) is kept.
     """
-    x2 = h + k - 1 + (1 - k) / t
-    y2 = 1.0
+    Computes coefficients (a, b, c) for the half-plane a*x + b*y <= c.
+    Fully compatible with jax.grad and vectorized operations.
+    """
     x1, y1 = h, k
-    # line through (x1,y1) & (x2,y2)
-    if abs(x2 - x1) < 1e-12:
-        # vertical line x = x1; keep right side (higher FPR): x >= x1 -> -x <= -x1
-        return (-1.0, 0.0, -x1)
-    m = (y2 - y1) / (x2 - x1)
+    y2 = 1.0
+    
+    # 1. Protect against division by zero if t = 0
+    is_t_zero = jnp.abs(t) < 1e-12
+    safe_t = jnp.where(is_t_zero, 1e-12, t)
+    
+    # Calculate x2 using the protected t value
+    x2 = h + k - 1.0 + (1.0 - k) / safe_t
+    
+    # 2. Safely check for vertical line slopes
+    dx = x2 - x1
+    is_vertical = jnp.abs(dx) < 1e-12
+    safe_dx = jnp.where(is_vertical, 1e-12, dx)
+    
+    m = (y2 - y1) / safe_dx
     b0 = y1 - m * x1
-    if m >= 0:
-        # keep higher FPR side: x >= (y - b0)/m -> -m x + y <= b0
-        a, b, c = -m, 1.0, b0
-    else:
-        # m < 0: x >= (y - b0)/m -> m x - y <= -b0
-        a, b, c = m, -1.0, -b0
-    return (a, b, c)
+    
+    # 3. Handle slope orientations
+    a_pos, b_pos, c_pos = -m, 1.0, b0
+    a_neg, b_neg, c_neg = m, -1.0, -b0
+    
+    a_slope = jnp.where(m >= 0, a_pos, a_neg)
+    b_slope = jnp.where(m >= 0, b_pos, b_neg)
+    c_slope = jnp.where(m >= 0, c_pos, c_neg)
+    
+    # 4. Apply standard vertical line override flag if dx was near zero
+    a_mid = jnp.where(is_vertical, -1.0, a_slope)
+    b_mid = jnp.where(is_vertical, 0.0, b_slope)
+    c_mid = jnp.where(is_vertical, -x1, c_slope)
+    
+    # 5. ULTIMATE OVERRIDE FOR t = 0
+    # When t = 0, the line collapses geometrically to a pure horizontal boundary 
+    # tracking the height of your current point k:
+    # y >= k  ->  0*x - 1*y <= -k
+    a_zero_t = 0.0
+    b_zero_t = -1.0
+    c_zero_t = -k
+    
+    a = jnp.where(is_t_zero, a_zero_t, a_mid)
+    b = jnp.where(is_t_zero, b_zero_t, b_mid)
+    c = jnp.where(is_t_zero, c_zero_t, c_mid)
+    
+    return a, b, c
 
 
 # ---- Reduced area ----
@@ -182,25 +287,62 @@ def reduced_area(h, k, κ, α, P, N, fp_cost_ratio, return_percent=True,
     """
     r = fp_cost_ratio
     t = r * N / (r * N + P)
+    
+    # 1. Compute total region polygon and area
     total_poly_area, total_poly = total_region_area(P, N, α, κ)
-    if total_poly_area == 0:
-        if return_total_area and return_details:
-            return 0.0, 0.0, {"total_polygon": total_poly, "iso_polygon": [], "iso_line": None, "t": None}
-        if return_total_area:
-            return 0.0, 0.0
-        return 0.0 if not return_details else (0.0, {"total_polygon": total_poly, "iso_polygon": [], "iso_line": None, "t": None})
+    
+    # 2. Compute iso-performance line and clip
     a, b, c = _iso_performance_line(h, k, t)
-    # Intersect total polygon with iso half-plane
     iso_poly = _clip_polygon_with_halfplane(total_poly, a, b, c)
-    raw_area = abs(area(jnp.array(iso_poly))) if iso_poly else 0.0
-    value = raw_area / total_poly_area if return_percent else raw_area
+    
+    # 3. Calculate raw intersection area
+    raw_area = area(iso_poly)
+    
+    # 4. Handle Area Scale Logic mathematically via jnp.where 
+    # to protect against division-by-zero if total_poly_area is 0
+    safe_total_area = jnp.where(total_poly_area == 0.0, 1.0, total_poly_area)
+    percent_area = raw_area / safe_total_area
+    
+    # Select our baseline value target dynamically without branching
+    selected_value = jnp.where(return_percent, percent_area, raw_area)
+    
+    # If the total area is strictly zero, override the final value to 0.0
+    value = jnp.where(total_poly_area == 0.0, 0.0, selected_value)
+    
+    # 5. Handle Return Structures Statically
+    # Since these flags are plain Python booleans passed at call-time, 
+    # JAX unrolls these branches perfectly during tracing!
     if return_total_area and return_details:
-        return value, total_poly_area, {"total_polygon": total_poly, "iso_polygon": iso_poly, "iso_line": (a, b, c), "t": t}
+        details = {"total_polygon": total_poly, "iso_polygon": iso_poly, "iso_line": (a, b, c), "t": t}
+        return value, total_poly_area, details
+        
     if return_total_area:
         return value, total_poly_area
+        
     if return_details:
-        return value, {"total_polygon": total_poly, "iso_polygon": iso_poly, "iso_line": (a, b, c), "t": t}
+        details = {"total_polygon": total_poly, "iso_polygon": iso_poly, "iso_line": (a, b, c), "t": t}
+        return value, details
+        
     return value
+
+    # if total_poly_area == 0:
+    #     if return_total_area and return_details:
+    #         return 0.0, 0.0, {"total_polygon": total_poly, "iso_polygon": [], "iso_line": None, "t": None}
+    #     if return_total_area:
+    #         return 0.0, 0.0
+    #     return 0.0 if not return_details else (0.0, {"total_polygon": total_poly, "iso_polygon": [], "iso_line": None, "t": None})
+    # a, b, c = _iso_performance_line(h, k, t)
+    # # Intersect total polygon with iso half-plane
+    # iso_poly = _clip_polygon_with_halfplane(total_poly, a, b, c)
+    # raw_area = abs(area(jnp.array(iso_poly))) if iso_poly else 0.0
+    # value = raw_area / total_poly_area if return_percent else raw_area
+    # if return_total_area and return_details:
+    #     return value, total_poly_area, {"total_polygon": total_poly, "iso_polygon": iso_poly, "iso_line": (a, b, c), "t": t}
+    # if return_total_area:
+    #     return value, total_poly_area
+    # if return_details:
+    #     return value, {"total_polygon": total_poly, "iso_polygon": iso_poly, "iso_line": (a, b, c), "t": t}
+    # return value
 
 
 # ---- Threshold feasibility filter ----

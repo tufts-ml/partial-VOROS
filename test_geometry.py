@@ -73,11 +73,16 @@ class TestGeometry(unittest.TestCase):
     def clipping_equality(self, test_clipped_polygon, clipped_polygon):
         # Convert JAX output using Python's native round() to strip 32-bit artifacts
         jax_np = np.array(test_clipped_polygon)
-        jax_set = { (round(float(p[0]), 4), round(float(p[1]), 4)) for p in jax_np }
+        jax_set = {
+            (round(float(p[0]), 4), round(float(p[1]), 4)) 
+            for p in jax_np if not np.any(np.isnan(p))
+        }
 
-        # Convert expected output using the exact same logic
         expected_np = np.array(clipped_polygon)
-        expected_set = { (round(float(p[0]), 4), round(float(p[1]), 4)) for p in expected_np }
+        expected_set = {
+            (round(float(p[0]), 4), round(float(p[1]), 4)) 
+            for p in expected_np if not np.any(np.isnan(p))
+        }
 
         # This will now match exactly and pass!
         self.assertEqual(jax_set, expected_set)
@@ -150,6 +155,167 @@ class TestGeometry(unittest.TestCase):
         # print(f"pentagonComputed clipped polygon: {test_clipped_polygon}, Expected clipped polygon: {clipped_polygon}")
         self.clipping_equality(test_clipped_polygon, clipped_polygon)
 
+    def test_intersect_halfplanes(self):
+        # Test case 9: Intersecting halfplanes to form a square
+        halfplanes = jnp.array([[1, 0, 1], [-1, 0, 0], [0, 1, 1], [0, -1, 0]])
+        test_polygon = _geometry_jax._intersect_halfplanes(halfplanes)
+        polygon = _geometry._intersect_halfplanes(halfplanes)
+        # print(f"Computed intersected polygon: {test_polygon}, Expected intersected polygon: {polygon}")
+        self.clipping_equality(test_polygon, polygon)
+
+    def test_intersect_halfplanes_triangle(self):
+        # Test case 10: Intersecting halfplanes to form a triangle
+        halfplanes = jnp.array([[1, 0, 1], [-1, 0, 0], [0, 1, 1]])
+        test_polygon = _geometry_jax._intersect_halfplanes(halfplanes)
+        polygon = _geometry._intersect_halfplanes(halfplanes)
+        # print(f"Computed intersected polygon: {test_polygon}, Expected intersected polygon: {polygon}")
+        self.clipping_equality(test_polygon, polygon)
+
+    def test_intersect_halfplanes_pentagon(self):
+        # Test case 11: Intersecting halfplanes to form a pentagon
+        halfplanes = jnp.array([[1, 0, 1], [-1, 0, 0], [0, 1, 1], [0, -1, 0], [1, -1, 0]])
+        test_polygon = _geometry_jax._intersect_halfplanes(halfplanes)
+        polygon = _geometry._intersect_halfplanes(halfplanes)
+        # print(f"Computed intersected polygon: {test_polygon}, Expected intersected polygon: {polygon}")
+        self.clipping_equality(test_polygon, polygon)
+
+    def test_intersect_halfplanes_empty(self):##
+        # Test case 12: Intersecting halfplanes that do not intersect (empty polygon)
+        halfplanes = jnp.array([[1, 0, 1], [-1, 0, -2], [0, 1, 1], [0, -1, -2]])
+        test_polygon = _geometry_jax._intersect_halfplanes(halfplanes)
+        polygon = _geometry._intersect_halfplanes(halfplanes)
+        # print(f"Computed intersected polygon: {test_polygon}, Expected intersected polygon: {polygon}")
+        self.clipping_equality(test_polygon, polygon)
+
+    def test_feasible_polygon_precision(self):
+        # Test case 13: Feasible polygon with given P, N, alpha, kappa
+        P = 4
+        N = 6
+        alpha = 0.5
+        kappa = 20
+        test_polygon = _geometry_jax.compute_total_region_polygon(P, N, alpha, kappa)
+        polygon = _geometry.compute_total_region_polygon(P, N, alpha, kappa)
+        # print(f"Computed feasible polygon: {test_polygon}, Expected feasible polygon: {polygon}")
+        self.clipping_equality(test_polygon, polygon)
+
+    def test_feasible_polygon_capacity(self):
+        # Test case 14: Feasible polygon, only capacity line
+        P = 4
+        N = 6
+        alpha = 0.0001
+        kappa = 5
+        test_polygon = _geometry_jax.compute_total_region_polygon(P, N, alpha, kappa)
+        polygon = _geometry.compute_total_region_polygon(P, N, alpha, kappa)
+        # print(f"Computed feasible polygon: {test_polygon}, Expected feasible polygon: {polygon}")
+        self.clipping_equality(test_polygon, polygon)
+
+    def test_feasible_polygon(self):
+        # Test case 14: Feasible polygon, only capacity line
+        P = 4
+        N = 6
+        alpha = 0.5
+        kappa = 5
+        test_polygon = _geometry_jax.compute_total_region_polygon(P, N, alpha, kappa)
+        polygon = _geometry.compute_total_region_polygon(P, N, alpha, kappa)
+        # print(f"Computed feasible polygon: {test_polygon}, Expected feasible polygon: {polygon}")
+        self.clipping_equality(test_polygon, polygon)
+
+    def test_feasible_precision(self):
+        # Test case 15:
+        P = 4
+        N = 6
+        alpha = 0.5
+        kappa = 20
+        test_poly_area, test_polygon = _geometry_jax.total_region_area(P, N, alpha, kappa)
+        poly_area, polygon = _geometry.total_region_area(P, N, alpha, kappa)
+        self.clipping_equality(test_polygon, polygon)
+        self.assertAlmostEqual(test_poly_area, poly_area)
+    
+    def test_feasible_area_capacity(self):
+        # Test case 15:
+        P = 4
+        N = 6
+        alpha = 0.1
+        kappa = 5
+        test_poly_area, test_polygon = _geometry_jax.total_region_area(P, N, alpha, kappa)
+        poly_area, polygon = _geometry.total_region_area(P, N, alpha, kappa)
+        self.clipping_equality(test_polygon, polygon)
+        self.assertAlmostEqual(test_poly_area, poly_area)
+    
+    
+    def test_feasible_area(self):
+        # Test case 15:
+        P = 4
+        N = 6
+        alpha = 0.5
+        kappa = 5
+        test_poly_area, test_polygon = _geometry_jax.total_region_area(P, N, alpha, kappa)
+        poly_area, polygon = _geometry.total_region_area(P, N, alpha, kappa)
+        self.clipping_equality(test_polygon, polygon)
+        self.assertAlmostEqual(test_poly_area, poly_area)
+
+    def test_feasible_area2(self):
+        # Test case 15:
+        P = 10
+        N = 100
+        alpha = 0.15
+        kappa = 20
+        test_poly_area, test_polygon = _geometry_jax.total_region_area(P, N, alpha, kappa)
+        poly_area, polygon = _geometry.total_region_area(P, N, alpha, kappa)
+        self.clipping_equality(test_polygon, polygon)
+        self.assertAlmostEqual(test_poly_area, poly_area)
+
+    def test_iso(self):
+        h = 0.5
+        k = 0.5
+        t = 1/8
+
+        a_test, b_test, c_test = _geometry_jax._iso_performance_line(h, k, t)
+        a, b, c = _geometry._iso_performance_line(h, k, t)
+
+        self.assertAlmostEqual(a_test, a)
+        self.assertAlmostEqual(b_test, b)
+        self.assertAlmostEqual(c_test, c)
+
+    def test_iso_2(self):
+        h = 0.5
+        k = 0.5
+        t = 0
+
+        a_test, b_test, c_test = _geometry_jax._iso_performance_line(h, k, t)
+        # a, b, c = _geometry._iso_performance_line(h, k, t)
+
+        self.assertAlmostEqual(a_test, 0)
+        self.assertAlmostEqual(b_test, -1)
+        self.assertAlmostEqual(c_test, -k)
+    
+    def test_iso_3(self):
+        h = 0.5
+        k = 0.5
+        t = 1
+
+        a_test, b_test, c_test = _geometry_jax._iso_performance_line(h, k, t)
+        a, b, c = _geometry._iso_performance_line(h, k, t)
+
+        self.assertAlmostEqual(a_test, a)
+        self.assertAlmostEqual(b_test, b)
+        self.assertAlmostEqual(c_test, c)
+
+    def test_reduced(self):
+        h = 0.5
+        k = 0.5
+        kappa = 20
+        alpha = 0.15
+        P = 10
+        N = 100
+        fp_cost_ratio = 1/6
+
+        test_value, test_total_poly_area = _geometry_jax.reduced_area(h, k, kappa, alpha, P, N, fp_cost_ratio, True, False, True)
+        value, total_poly_area = _geometry.reduced_area(h, k, kappa, alpha, P, N, fp_cost_ratio, True, False, True)
+
+        self.assertAlmostEqual(test_value, value)
+        self.assertAlmostEqual(test_total_poly_area, total_poly_area)
+        # self.assertEqual(test_details, details)
 
 if __name__ == '__main__':
     unittest.main()
