@@ -364,11 +364,10 @@ def keep_model(fpr, tpr, target_prec, target_cap, count_N, count_P):
     lower_bound = (target_prec * count_N * fpr) / ((1 - target_prec) * count_P)
 
     # Round for stable comparisons
-    tpr_r = round(float(tpr), 6)
-    upper_r = round(float(upper_bound), 6)
-    lower_r = round(float(lower_bound), 6)
+    satisfies_capacity = (tpr - upper_bound) <= 1e-6
+    satisfies_precision = (lower_bound - tpr) <= 1e-6
 
-    return (tpr_r <= upper_r) and (tpr_r >= lower_r)
+    return satisfies_precision and satisfies_capacity
 
 
 # ---- Cost ratio / t conversions ----
