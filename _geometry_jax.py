@@ -9,43 +9,48 @@ from jax import config
 config.update("jax_enable_x64", True)
 
 def area(polygon_points):
+    """
+    Calculates the area of a polygon using the Shoelace Formula 
+    for an array of vertices.
+
+    polygon_points: jnp.array or np.array of indices ([x1,y1],...,[xn,yn])
+
+    Returns the calculated area
+    """
+    # No points 
     if polygon_points.shape[0] == 0:
         return 0.0
     
-    # 1. Filter out empty polygon markers if the polygon completely disappeared
+    # Filter out empty polygon points if the polygon completely disappeared
     is_nan = jnp.isnan(polygon_points[:, 0])
     clean_poly = jnp.where(is_nan[:, None], 0.0, polygon_points)
     
-    # 2. Identify and keep only the truly UNIQUE consecutive vertices.
-    # We compare each row with its preceding neighbor.
+    # Compare points with immediate neighbors in array to find unique points
     diffs = jnp.abs(clean_poly - jnp.roll(clean_poly, 1, axis=0))
-    is_unique_edge = jnp.any(diffs > 1e-5, axis=1)
+    is_unique_edge = jnp.any(diffs > 1e-12, axis=1)
     
-    # 3. Pull out ONLY the valid unique coordinates
-    # Non-unique duplicate rows collapse cleanly into (0.0, 0.0)
+    # Pull out valid unique coordinates
+    # Non-unique duplicate rows collapse into (0.0, 0.0)
     valid_vertices = jnp.where(is_unique_edge[:, None], clean_poly, 0.0)
     
-    # 4. Compute the geometric center (centroid) of the unique shape boundaries
-    num_valid = jnp.sum(is_unique_edge)
+    # Compute the geometric center of the unique shape boundaries (for sorting)
+    num_valid = jnp.sum(is_unique_edge) #upper bound
     cx = jnp.sum(valid_vertices[:, 0]) / (num_valid + 1e-15)
     cy = jnp.sum(valid_vertices[:, 1]) / (num_valid + 1e-15)
     
-    # 5. Sort indices counter-clockwise relative to the center.
-    # This guarantees a perfect sequential perimeter loop for the Shoelace math.
+    # Sort indices counter-clockwise relative to the center (for shoelace)
     angles = jnp.arctan2(valid_vertices[:, 1] - cy, valid_vertices[:, 0] - cx)
-    # Force unused padding points to a high dummy angle so they cluster at the end
+    # Force unused padding points to a high invalid angle (invalid points are at end of matrix)
     sorted_angles = jnp.where(is_unique_edge, angles, 5.0)
     
     sorted_idx = jnp.argsort(sorted_angles)
     ordered_poly = valid_vertices[sorted_idx]
     
-    # 6. Apply Shoelace formula exclusively within the valid boundary segment.
-    # Instead of rolling across the whole matrix (which includes the 0,0 padding tail),
-    # we roll only across the active unique vertices.
+    ##### SHOELACE FORMULA
     x = ordered_poly[:, 0]
     y = ordered_poly[:, 1]
     
-    # Standard vector cross products
+    # x_i*y_i+1, y_i*x_i+1
     term1 = x * jnp.roll(y, -1)
     term2 = y * jnp.roll(x, -1)
     
@@ -54,13 +59,13 @@ def area(polygon_points):
     padded_mask = (jnp.arange(polygon_points.shape[0]) < num_valid)
     raw_area = 0.5 * jnp.abs(jnp.sum(jnp.where(padded_mask, term1 - term2, 0.0)))
     
-    # Handle the boundary edge closure loop from the last unique vertex back to the first
+    # Closure for first and last points
     first_pt = ordered_poly[0]
-    # Use dynamic gathering to extract the last unique vertex index safely
     last_pt = ordered_poly[jnp.clip(num_valid - 1, 0, polygon_points.shape[0] - 1)]
     closure_term = 0.5 * jnp.abs(last_pt[0] * first_pt[1] - last_pt[1] * first_pt[0])
     
     # If the polygon had less than 3 unique vertices, the real area is 0.0
+    # Otherwise area = shoelace formula
     final_area = jnp.where(num_valid < 3, 0.0, raw_area + closure_term)
     
     return jnp.where(jnp.any(is_nan), 0.0, final_area)
@@ -68,9 +73,15 @@ def area(polygon_points):
 # ---- Sutherland-Hodgman clipping ----
 
 def _clip_polygon_with_halfplane(poly, a, b, c):
-    """Sutherland-Hodgman style clipping of convex polygon with half-plane a*x + b*y <= c.
-    poly: list of (x,y) vertices in order (convex assumed)
-    Returns new list of vertices (may be empty).
+    """
+    Clips a convex polygon with a half-plane (Sutherland-Hodgman style).
+
+    poly: array of (x,y) vertices
+    a: coefficient of x in half-plane inequality (ax + by <= c)
+    a: coefficient of x in half-plane inequality (ax + by <= c)
+    c: intercept term in half-plane inequality (ax+ by <= c)
+    
+    Returns new list of vertices for the clipped polygon (may be empty).
     """
 
     N = poly.shape[0]
@@ -78,16 +89,18 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     curr_pts = poly
     next_pts = jnp.roll(poly, -1, axis=0)
     
-    # Evaluate half-plane: value <= 1e-6 means INSIDE
+    # Evaluate half-plane: value <= 1e-12 (less than 0 plus tol) 
+    # means the point is INSIDE the boundary half plane
     v_curr = a * curr_pts[:, 0] + b * curr_pts[:, 1] - c
     v_next = a * next_pts[:, 0] + b * next_pts[:, 1] - c
     
+    # Masks for which points are inside
     curr_inside = v_curr <= 1e-12
     next_inside = v_next <= 1e-12
     
     # Calculate exact edge intersections
     denom = v_curr - v_next
-    safe_denom = jnp.where(jnp.abs(denom) < 1e-15, 1e-15, denom)
+    safe_denom = jnp.where(jnp.abs(denom) < 1e-15, 1e-15, denom) #in case edge is parallel to clipping line
     t = jnp.clip(v_curr / safe_denom, 0.0, 1.0)
     intersections = curr_pts + t[:, None] * (next_pts - curr_pts)
     
@@ -99,12 +112,12 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     use_next_B = (~curr_inside) & next_inside
     pt_B = jnp.where(use_next_B[:, None], next_pts, pt_A)
     
-    # Interleave to build initial fixed array shape (2*N, 2)
+    # Flatten array to build initial fixed array shape (2*N, 2)
     output = jnp.stack([pt_A, pt_B], axis=1).reshape(2 * N, 2)
     
     # --- OUTSIDE CLEANUP --- 
     v_out = a * output[:, 0] + b * output[:, 1] - c
-    # Relaxed to 1e-4 to prevent floating-point precision noise from killing valid boundary lines
+    # Floating point precision tolerance
     is_outside = v_out > 1e-12 
     
     # Find a locally valid anchor point from this specific clipping step
@@ -112,12 +125,13 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     any_survived = jnp.any(curr_inside)
     local_anchor = jnp.where(any_survived, poly[first_inside_idx], poly[0])
     
-    # Force any remaining outside coordinate noise to snap directly to the local anchor
+    # Force any remaining outside coordinate noise to the local anchor
     clipped_poly = jnp.where(is_outside[:, None], local_anchor, output)
     
     # --- EMPTY OBLITERATION STEP ---
     has_nan = jnp.any(jnp.isnan(poly))
     is_still_valid = any_survived & (~has_nan)
+    
     
     final_poly = jnp.where(is_still_valid, clipped_poly, jnp.nan)
     
