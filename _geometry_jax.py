@@ -77,7 +77,7 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     curr_pts = poly
     next_pts = jnp.roll(poly, -1, axis=0)
     
-    # Evaluate half-plane: value <= 0 means INSIDE
+    # Evaluate half-plane: value <= 1e-6 means INSIDE
     v_curr = a * curr_pts[:, 0] + b * curr_pts[:, 1] - c
     v_next = a * next_pts[:, 0] + b * next_pts[:, 1] - c
     
@@ -92,7 +92,8 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     
     # --- EDGE CONDITIONAL ASSIGNMENTS ---
     crossed = (curr_inside != next_inside)
-    pt_A = jnp.where(crossed[:, None], intersections, next_pts)
+    pt_A = jnp.where(crossed[:, None], intersections, 
+                     jnp.where(next_inside[:, None], next_pts, intersections))
     
     use_next_B = (~curr_inside) & next_inside
     pt_B = jnp.where(use_next_B[:, None], next_pts, pt_A)
@@ -100,23 +101,20 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     # Interleave to build initial fixed array shape (2*N, 2)
     output = jnp.stack([pt_A, pt_B], axis=1).reshape(2 * N, 2)
     
-    # Check if the entire shape has been completely wiped out
-    any_survived = jnp.any(curr_inside)
-    
-    # Extract anchor point safely if something is inside
-    first_inside_idx = jnp.argmax(curr_inside)
-    dynamic_safe_anchor = jnp.where(any_survived, poly[first_inside_idx], poly[0])
-    
-    # Re-evaluate the final generated positions against the current plane
+    # --- OUTSIDE CLEANUP ---
     v_out = a * output[:, 0] + b * output[:, 1] - c
-    is_outside = v_out > 1e-6
+    # Relaxed to 1e-4 to prevent floating-point precision noise from killing valid boundary lines
+    is_outside = v_out > 1e-4 
     
-    # Snap outside noise to our anchor point
-    clipped_poly = jnp.where(is_outside[:, None], dynamic_safe_anchor, output)
+    # Find a locally valid anchor point from this specific clipping step
+    first_inside_idx = jnp.argmax(curr_inside)
+    any_survived = jnp.any(curr_inside)
+    local_anchor = jnp.where(any_survived, poly[first_inside_idx], poly[0])
+    
+    # Force any remaining outside coordinate noise to snap directly to the local anchor
+    clipped_poly = jnp.where(is_outside[:, None], local_anchor, output)
     
     # --- EMPTY OBLITERATION STEP ---
-    # If absolutely nothing survived this clip or any previous clip (contains NaN),
-    # force the entire matrix to evaluate to a safe NaN marker block.
     has_nan = jnp.any(jnp.isnan(poly))
     is_still_valid = any_survived & (~has_nan)
     

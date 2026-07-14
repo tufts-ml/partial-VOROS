@@ -302,10 +302,10 @@ class TestGeometry(unittest.TestCase):
         self.assertAlmostEqual(c_test, c)
 
     def test_reduced(self):
-        h = 0.5
+        h = 0.1
         k = 0.5
-        kappa = 20
-        alpha = 0.15
+        kappa = 30
+        alpha = 0.2
         P = 10
         N = 100
         fp_cost_ratio = 1/6
