@@ -481,7 +481,11 @@ def max_area_per_t(fprs, tprs,κ,α,P,N,min_fp_cost_ratio,max_fp_cost_ratio,
 
 # ---- VOROS integrator ----
 
-def voros(
+from typing import Optional
+import jax.numpy as jnp
+import jax
+
+def voros_jax(
     fprs,
     tprs,
     κ,
@@ -492,15 +496,14 @@ def voros(
     max_fp_cost_ratio,
     n_points: int = 1000,
     return_best_thresholds: bool = False,
-    thresholds: Optional[np.ndarray] = None,
+    thresholds: Optional[jnp.ndarray] = None,
     do_fast_threshold_sel_via_cost=False,
 ):
     """Compute partial VOROS (average of max reduced area across t in range).
-
-    If return_best_thresholds=True, returns (voros_value, ts, best_thresholds_per_t),
-    where best_thresholds_per_t aligns with ts and contains the threshold (from
-    provided 'thresholds') achieving the max area at each t.
+    
+    Fully compatible with JAX auto-differentiation (jax.grad).
     """
+    # 1. Dispatch to max_area_per_t (ensure your max_area_per_t is also JAX-compatible!)
     if return_best_thresholds:
         max_points, ts, best_thresholds = max_area_per_t(
             fprs, tprs, κ, α, P, N, min_fp_cost_ratio, max_fp_cost_ratio,
@@ -513,17 +516,29 @@ def voros(
             n_points=n_points, do_fast_threshold_sel_via_cost=do_fast_threshold_sel_via_cost,
         )
 
-    # Integrate in r-space (cost-ratio space) where we have uniform sampling.
-    # The expectation is E_{r ~ Uniform}[f(r)] = (1/(r_max - r_min)) * integral f(r) dr.
-    fp_cost_ratios = np.linspace(min_fp_cost_ratio, max_fp_cost_ratio, n_points)
+    # 2. Use jnp.linspace instead of np.linspace
+    fp_cost_ratios = jnp.linspace(min_fp_cost_ratio, max_fp_cost_ratio, n_points)
     r_range = max_fp_cost_ratio - min_fp_cost_ratio
-    if len(fp_cost_ratios) > 1 and r_range > 0:
-        integral_val = scipy.integrate.trapezoid(max_points, x=fp_cost_ratios)
-        vor = float(integral_val) / r_range
-    else:
-        vor = float(max_points[0]) if max_points else 0.0
+    
+    # 3. Replace scipy.integrate.trapezoid with JAX-compatible trapezoidal integration.
+    # We also avoid dynamic Python 'if' checks on tracer values (like r_range > 0 or len > 1) 
+    # by using jnp.where or structural defaults.
+    
+    # Compute trapezoidal integration: dx * (y_0 + 2*y_1 + ... + 2*y_{n-1} + y_n) / 2
+    dx = (max_fp_cost_ratio - min_fp_cost_ratio) / (n_points - 1)
+    integral_val = 0.5 * dx * (max_points[0] + max_points[-1] + 2.0 * jnp.sum(max_points[1:-1]))
+    
+    # 4. Use jnp.where to handle the r_range <= 0 safely without breaking the gradient trace
+    vor = jnp.where(
+        (n_points > 1) & (r_range > 0),
+        integral_val / r_range,
+        max_points[0]
+    )
+
     if return_best_thresholds:
-        return vor, np.array(ts, dtype=float), np.array(best_thresholds, dtype=float)
+        # Cast outputs to JAX arrays instead of numpy arrays
+        return vor, jnp.array(ts, dtype=jnp.float32), jnp.array(best_thresholds, dtype=jnp.float32)
+        
     return vor
 
 

@@ -4,6 +4,7 @@ import _geometry_jax
 import _geometry
 import jax.numpy as jnp
 import numpy as np
+import time
 
 class TestGeometry(unittest.TestCase):
     def test_area_triangle(self):
@@ -446,27 +447,73 @@ class TestGeometry(unittest.TestCase):
 
 
     def test_max_area_2(self):
-            fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
-            tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
+        tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 
-            kappa = 30
-            alpha = 0.2
-            P = 10
-            N = 100
+        kappa = 30
+        alpha = 0.2
+        P = 10
+        N = 100
 
-            min_r = 1/9
-            max_r = 1/6
+        min_r = 1/9
+        max_r = 1/6
 
-            test_max_points, test_ts = _geometry_jax.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
-            max_points, ts = _geometry.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+        test_max_points, test_ts = _geometry_jax.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+        max_points, ts = _geometry.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
 
-            self.assertEqual(len(test_max_points), len(max_points))
-            self.assertEqual(len(test_ts), len(ts))
+        self.assertEqual(len(test_max_points), len(max_points))
+        self.assertEqual(len(test_ts), len(ts))
 
-            for i in range(len(max_points)):
-                self.assertAlmostEqual(float(test_max_points[i]), float(max_points[i]), places=6)
-                self.assertAlmostEqual(float(test_ts[i]), float(ts[i]), places=6)
+        for i in range(len(max_points)):
+            self.assertAlmostEqual(float(test_max_points[i]), float(max_points[i]), places=6)
+            self.assertAlmostEqual(float(test_ts[i]), float(ts[i]), places=6)
 
+    def test_voros(self):
+        fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
+        tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 
+        kappa = 30
+        alpha = 0.2
+        P = 10
+        N = 100
+
+        min_r = 1/9
+        max_r = 1/6
+        start = time.perf_counter()
+        test_vor = _geometry_jax.voros_jax(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+        end = time.perf_counter()
+        print(f"jax computation time {end-start}")
+        
+        start = time.perf_counter()
+        vor = _geometry.voros(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+        end = time.perf_counter()
+        print(f"ref computation time {end-start}")
+        self.assertAlmostEqual(float(test_vor), float(vor), places=6)
+        print(f"voros: {test_vor}")
+
+    def test_voros_1(self):
+        fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
+        tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+
+        kappa = 20
+        alpha = 0.3
+        P = 10
+        N = 100
+
+        min_r = 1/9
+        max_r = 1/6
+        
+        start_t = time.perf_counter()
+        test_vor = _geometry_jax.voros_jax(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+        end_t = time.perf_counter()
+        print(f"jax computation time {end_t-start_t}")
+        
+        start = time.perf_counter()
+        vor = _geometry.voros(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+        end = time.perf_counter()
+        print(f"ref computation time {end-start}")
+        self.assertAlmostEqual(float(test_vor), float(vor), places=6)
+
+        print(f"voros: {test_vor}")
 if __name__ == '__main__':
     unittest.main()
