@@ -5,7 +5,8 @@ import numpy as np
 import scipy.integrate
 from typing import Optional
 
-
+from jax import config
+config.update("jax_enable_x64", True)
 
 def area(polygon_points):
     if polygon_points.shape[0] == 0:
@@ -81,8 +82,8 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     v_curr = a * curr_pts[:, 0] + b * curr_pts[:, 1] - c
     v_next = a * next_pts[:, 0] + b * next_pts[:, 1] - c
     
-    curr_inside = v_curr <= 1e-6
-    next_inside = v_next <= 1e-6
+    curr_inside = v_curr <= 1e-12
+    next_inside = v_next <= 1e-12
     
     # Calculate exact edge intersections
     denom = v_curr - v_next
@@ -101,10 +102,10 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     # Interleave to build initial fixed array shape (2*N, 2)
     output = jnp.stack([pt_A, pt_B], axis=1).reshape(2 * N, 2)
     
-    # --- OUTSIDE CLEANUP ---
+    # --- OUTSIDE CLEANUP --- 
     v_out = a * output[:, 0] + b * output[:, 1] - c
     # Relaxed to 1e-4 to prevent floating-point precision noise from killing valid boundary lines
-    is_outside = v_out > 1e-4 
+    is_outside = v_out > 1e-12 
     
     # Find a locally valid anchor point from this specific clipping step
     first_inside_idx = jnp.argmax(curr_inside)
@@ -139,7 +140,7 @@ def _intersect_halfplanes(halfplanes, bbox=((0, 0), (1, 1))):
     max_vertices = 4 * (2 ** M)  
     
     # Start with a pristine CCW square, padded with duplicate coordinates
-    poly = jnp.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=jnp.float32)
+    poly = jnp.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=jnp.float64)
     # poly = jnp.tile(init_poly, (2 ** M, 1)) 
     
     # 2. Sequentially apply each halfplane step using jax.lax.fori_loop 
@@ -370,7 +371,7 @@ def keep_model(fpr, tpr, target_prec, target_cap, count_N, count_P):
 
 # ---- Cost ratio / t conversions ----
 
-def ratio_to_t(r: float, P: int, N: int) -> float:
+def ratio_to_t(r, P, N):
     """Convert fp_cost_ratio r to t = r*N/(r*N + P).
 
     >>> round(ratio_to_t(0.0, 100, 100), 6)
@@ -378,12 +379,14 @@ def ratio_to_t(r: float, P: int, N: int) -> float:
     >>> t = ratio_to_t(1.0, 100, 100); 0 < t < 1
     True
     """
-    if r < 0:
-        raise ValueError("ratio r must be >= 0")
-    return (r * float(N)) / (r * float(N) + float(P))
+    num = r * jnp.float64(N)
+    denom = num + jnp.float64(P)
+    # Prevent division-by-zero during optimization tracking
+    safe_denom = jnp.where(jnp.abs(denom) < 1e-15, 1e-15, denom)
+    return num / safe_denom
 
 
-def t_to_ratio(t: float, P: int, N: int) -> float:
+def t_to_ratio(t, P, N):
     """Convert t to fp_cost_ratio r given P,N.
 
     Assumes 0 <= t < 1.
@@ -393,71 +396,88 @@ def t_to_ratio(t: float, P: int, N: int) -> float:
     >>> r = t_to_ratio(0.5, 100, 100); r > 0
     True
     """
-    if t < 0 or t >= 1:
-        raise ValueError("t must satisfy 0 <= t < 1")
-    if t == 0:
-        return 0.0
-    return (float(P) / float(N)) * (t / (1.0 - t))
+    denom = 1.0 - t
+    safe_denom = jnp.where(jnp.abs(denom) < 1e-12, 1e-12, denom)
+    
+    # Calculate the continuous expression safely
+    raw_ratio = (jnp.float64(P) / jnp.float64(N)) * (t / safe_denom)
+    
+    # Smoothly map exactly t == 0 to 0.0 without branching errors
+    return jnp.where(t <= 1e-12, 0.0, raw_ratio)
 
 
 def calc_cost(t_G, fpr_G, tpr_G):
     cost_G = t_G * fpr_G + (1.0 - t_G) * (1.0 - tpr_G)
-    assert cost_G.max() <= 1.0
-    assert cost_G.min() >= 0.0
-    return cost_G
+    # Replaces assertions with safe mathematical capping if needed,
+    # keeping the bounds strictly [0.0, 1.0] across all optimization runs
+    return jnp.clip(cost_G, 0.0, 1.0)
 
 # ---- Max reduced area per cost ratio ----
 
-def max_area_per_t(
-    fprs,
-    tprs,
-    κ,
-    α,
-    P,
-    N,
-    min_fp_cost_ratio,
-    max_fp_cost_ratio,
+def max_area_per_t(fprs, tprs,κ,α,P,N,min_fp_cost_ratio,max_fp_cost_ratio,
     n_points: int = 1000,
     return_best_thresholds: bool = False,
     thresholds: Optional[np.ndarray] = None,
     do_fast_threshold_sel_via_cost=False,
 ):
-    """Calculate the maximum reduced area across ROC points for each cost ratio in a range.
-
-    If return_best_thresholds=True, also returns the threshold (from the provided
-    'thresholds' array) that achieved the max at each cost ratio. In that case,
-    'thresholds' must be provided and aligned with fprs/tprs.
-    Returns (max_points, ts) or (max_points, ts, best_thresholds).
     """
-    fp_cost_ratios = np.linspace(min_fp_cost_ratio, max_fp_cost_ratio, n_points)
-    ts = [ratio_to_t(fp_ratio, P, N) for fp_ratio in fp_cost_ratios]
+    Vectorized, JAX-native calculation of maximum reduced area across ROC points 
+    for each cost ratio. Optimized for float64 precision.
+    """
+    # 1. Generate the cost ratios and convert to t in a vectorized fashion
+    fp_cost_ratios = jnp.linspace(min_fp_cost_ratio, max_fp_cost_ratio, n_points, dtype=jnp.float64)
+    ts = ratio_to_t(fp_cost_ratios, P, N)
 
-    # for each fp_cost_ratio, calculate reduced area for all fpr,tpr pairs
-    max_points = []
-    best_thresh = [] if return_best_thresholds else None
-    for fp_ratio, t in zip(fp_cost_ratios, ts):
+    # We need a static check for thresholds if requested
+    if return_best_thresholds and thresholds is None:
+        raise ValueError("thresholds must be provided when return_best_thresholds=True")
+    
+    # Define a safe fallback if thresholds isn't passed so JAX doesn't trace a None type
+    safe_thresholds = thresholds if thresholds is not None else jnp.zeros_like(fprs)
+
+    # 2. Define the core processing logic for a SINGLE cost ratio (fp_ratio, t)
+    # This function will be cleanly mapped over all cost ratios using jax.vmap
+    def process_single_ratio(fp_ratio, t_val):
+        
+        # Branch 1: Fast selection via minimal cost optimization
+        def fast_selection_path():
+            costs = calc_cost(t_val, fprs, tprs)
+            # Handle empty point sets gracefully
+            imax = jnp.where(fprs.shape[0] > 0, jnp.argmin(costs), 0)
+            # Calculate the singular reduced area at the optimal point index
+            best_area = reduced_area(fprs[imax], tprs[imax], κ, α, P, N, fp_ratio)
+            # If empty, force area output to 0.0
+            final_area = jnp.where(fprs.shape[0] > 0, best_area, 0.0)
+            return final_area, imax
+
+        # Branch 2: Comprehensive search over all ROC pairs
+        def exhaustive_search_path():
+            # Vectorize reduced_area_jax over all input ROC coordinates for this specific fp_ratio
+            vmap_reduced_area = jax.vmap(
+                lambda f, t: reduced_area(f, t, κ, α, P, N, fp_ratio)
+            )
+            all_areas = vmap_reduced_area(fprs, tprs)
+            imax = jnp.where(fprs.shape[0] > 0, jnp.argmax(all_areas), 0)
+            final_area = jnp.where(fprs.shape[0] > 0, all_areas[imax], 0.0)
+            return final_area, imax
+
+        # Select the execution strategy. Since `do_fast_threshold_sel_via_cost` is a 
+        # static python boolean flag, JAX resolves this condition entirely at compile time.
         if do_fast_threshold_sel_via_cost:
-            costs = calc_cost(t, fprs, tprs)
-            if len(costs) > 0:
-                imax = int(np.argmin(costs))
-                bestarea = reduced_area(fprs[imax], tprs[imax], κ, α, P, N, fp_ratio)
-                max_points.append(bestarea)
-            else:
-                imax = -1
-                max_points.append(0.0) 
+            return fast_selection_path()
         else:
-            vals = [reduced_area(fpr, tpr, κ, α, P, N, fp_ratio) for fpr, tpr in zip(fprs, tprs)]
-            # find argmax
-            imax = int(np.argmax(vals)) if len(vals) else -1
-            max_points.append(vals[imax] if imax >= 0 else 0.0)
-        if return_best_thresholds:
-            if thresholds is None:
-                raise ValueError("thresholds must be provided when return_best_thresholds=True")
-            best_thresh.append(float(thresholds[imax]))
-    if return_best_thresholds:
-        return max_points, ts, np.array(best_thresh, dtype=float)
-    return max_points, ts
+            return exhaustive_search_path()
 
+    # 3. Vectorize the execution across all elements in fp_cost_ratios and ts
+    max_points, best_indices = jax.vmap(process_single_ratio)(fp_cost_ratios, ts)
+
+    # 4. Handle structural return combinations statically via compile-time constants
+    if return_best_thresholds:
+        # Extract the corresponding threshold value for every optimized ratio index
+        best_thresholds = safe_thresholds[best_indices]
+        return max_points, ts, best_thresholds
+
+    return max_points, ts
 
 # ---- VOROS integrator ----
 

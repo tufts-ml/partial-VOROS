@@ -301,6 +301,23 @@ class TestGeometry(unittest.TestCase):
         self.assertAlmostEqual(b_test, b)
         self.assertAlmostEqual(c_test, c)
 
+    def test_reduced_outside(self):
+        h = 0.5
+        k = 0.5
+        kappa = 30
+        alpha = 0.2
+        P = 10
+        N = 100
+        fp_cost_ratio = 1/6
+
+        test_value, test_total_poly_area = _geometry_jax.reduced_area(h, k, kappa, alpha, P, N, fp_cost_ratio, True, False, True)
+        value, total_poly_area = _geometry.reduced_area(h, k, kappa, alpha, P, N, fp_cost_ratio, True, False, True)
+
+        self.assertAlmostEqual(test_value, value)
+        self.assertAlmostEqual(test_total_poly_area, total_poly_area)
+        print(f"reduced area: {test_value}, total area:{test_total_poly_area}")
+        # self.assertEqual(test_details, details)
+    
     def test_reduced(self):
         h = 0.1
         k = 0.5
@@ -315,7 +332,141 @@ class TestGeometry(unittest.TestCase):
 
         self.assertAlmostEqual(test_value, value)
         self.assertAlmostEqual(test_total_poly_area, total_poly_area)
+        print(f"reduced area: {test_value}, total area:{test_total_poly_area}")
         # self.assertEqual(test_details, details)
+
+    def test_reduced_2(self):
+        h = 0.1
+        k = 0.5
+        kappa = 30
+        alpha = 0.2
+        P = 10
+        N = 100
+        fp_cost_ratio = 1/8
+
+        test_value, test_total_poly_area = _geometry_jax.reduced_area(h, k, kappa, alpha, P, N, fp_cost_ratio, True, False, True)
+        value, total_poly_area = _geometry.reduced_area(h, k, kappa, alpha, P, N, fp_cost_ratio, True, False, True)
+        print(f"reduced area: {test_value}, total area:{test_total_poly_area}")
+        self.assertAlmostEqual(test_value, value)
+        self.assertAlmostEqual(test_total_poly_area, total_poly_area)
+        # self.assertEqual(test_details, details)
+
+    def test_reduced_3(self):
+        h = 0.1
+        k = 0.8
+        kappa = 30
+        alpha = 0.2
+        P = 10
+        N = 100
+        fp_cost_ratio = 1/60
+
+        test_value, test_total_poly_area = _geometry_jax.reduced_area(h, k, kappa, alpha, P, N, fp_cost_ratio, True, False, True)
+        value, total_poly_area = _geometry.reduced_area(h, k, kappa, alpha, P, N, fp_cost_ratio, True, False, True)
+        print(f"reduced area: {test_value}, total area:{test_total_poly_area}")
+        self.assertAlmostEqual(test_value, value)
+        self.assertAlmostEqual(test_total_poly_area, total_poly_area)
+    
+    def test_keep_model(self):
+        h = 0.1
+        k = 0.5
+        kappa = 30
+        alpha = 0.2
+        P = 10
+        N = 100
+
+        self.assertTrue(_geometry.keep_model(h, k, alpha, kappa, N, P))
+        self.assertTrue(_geometry_jax.keep_model(h, k, alpha, kappa, N, P))
+
+    def test_keep_model_false(self):
+        h = 0.7
+        k = 0.7
+        kappa = 30
+        alpha = 0.2
+        P = 10
+        N = 100
+
+        self.assertFalse(_geometry.keep_model(h, k, alpha, kappa, N, P))
+        self.assertFalse(_geometry_jax.keep_model(h, k, alpha, kappa, N, P))
+
+    def test_ratio(self):
+        r = 1/6
+        P = 10
+        N = 100
+
+        r_to_t = _geometry.ratio_to_t(r, P, N)
+        self.assertAlmostEqual(r, _geometry.t_to_ratio(r_to_t, P, N), places=12)
+
+        test_r_to_t = _geometry_jax.ratio_to_t(r, P, N)
+        self.assertAlmostEqual(r, _geometry_jax.t_to_ratio(test_r_to_t, P, N), places=12)
+
+
+    def test_t(self):
+        t = 0
+        P = 10
+        N = 100
+
+        t_to_r = _geometry.t_to_ratio(t, P, N)
+        self.assertAlmostEqual(t, _geometry.ratio_to_t(t, P, N), places=12)
+
+        test_t_to_r = _geometry_jax.t_to_ratio(t, P, N)
+        self.assertAlmostEqual(t, _geometry_jax.ratio_to_t(test_t_to_r, P, N), places=12)
+
+    def test_t_2(self):
+        t = 0.8
+        P = 10
+        N = 100
+
+        t_to_r = _geometry.t_to_ratio(t, P, N)
+        self.assertAlmostEqual(t, _geometry.ratio_to_t(t_to_r, P, N), places=12)
+
+        test_t_to_r = _geometry_jax.t_to_ratio(t, P, N)
+        self.assertAlmostEqual(t, _geometry_jax.ratio_to_t(test_t_to_r, P, N), places=12)
+
+    def test_max_area(self):
+        fprs = jnp.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+        tprs = jnp.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+
+        kappa = 30
+        alpha = 0.2
+        P = 10
+        N = 100
+
+        min_r = 1/9
+        max_r = 1/6
+
+        test_max_points, test_ts = _geometry_jax.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+        max_points, ts = _geometry.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+
+        self.assertEqual(len(test_max_points), len(max_points))
+        self.assertEqual(len(test_ts), len(ts))
+
+        for i in range(len(max_points)):
+            self.assertAlmostEqual(float(test_max_points[i]), float(max_points[i]), places=6)
+            self.assertAlmostEqual(float(test_ts[i]), float(ts[i]), places=6)
+
+
+    def test_max_area_2(self):
+            fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
+            tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+
+            kappa = 30
+            alpha = 0.2
+            P = 10
+            N = 100
+
+            min_r = 1/9
+            max_r = 1/6
+
+            test_max_points, test_ts = _geometry_jax.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+            max_points, ts = _geometry.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
+
+            self.assertEqual(len(test_max_points), len(max_points))
+            self.assertEqual(len(test_ts), len(ts))
+
+            for i in range(len(max_points)):
+                self.assertAlmostEqual(float(test_max_points[i]), float(max_points[i]), places=6)
+                self.assertAlmostEqual(float(test_ts[i]), float(ts[i]), places=6)
+
 
 if __name__ == '__main__':
     unittest.main()
