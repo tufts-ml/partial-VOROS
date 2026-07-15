@@ -5,6 +5,7 @@ import _geometry
 import jax.numpy as jnp
 import numpy as np
 import time
+import visualize_data
 
 class TestGeometry(unittest.TestCase):
     def test_area_triangle(self):
@@ -121,7 +122,6 @@ class TestGeometry(unittest.TestCase):
         # print(f"Computed clipped polygon: {test_clipped_polygon}, Expected clipped polygon: {clipped_polygon}")
         # self.assertAlmostEqual(test_clipped_polygon, clipped_polygon)
         self.clipping_equality(test_clipped_polygon, clipped_polygon)
-
 
     def test_clipping_triangle_triangle(self):
         # Test case 8: Clipping a triangle with a line
@@ -242,7 +242,6 @@ class TestGeometry(unittest.TestCase):
         poly_area, polygon = _geometry.total_region_area(P, N, alpha, kappa)
         self.clipping_equality(test_polygon, polygon)
         self.assertAlmostEqual(test_poly_area, poly_area)
-    
     
     def test_feasible_area(self):
         # Test case 15:
@@ -400,7 +399,6 @@ class TestGeometry(unittest.TestCase):
         test_r_to_t = _geometry_jax.ratio_to_t(r, P, N)
         self.assertAlmostEqual(r, _geometry_jax.t_to_ratio(test_r_to_t, P, N), places=12)
 
-
     def test_t(self):
         t = 0
         P = 10
@@ -445,18 +443,15 @@ class TestGeometry(unittest.TestCase):
             self.assertAlmostEqual(float(test_max_points[i]), float(max_points[i]), places=6)
             self.assertAlmostEqual(float(test_ts[i]), float(ts[i]), places=6)
 
-
     def test_max_area_2(self):
-        fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
-        tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-
-        kappa = 30
-        alpha = 0.2
-        P = 10
-        N = 100
-
-        min_r = 1/9
-        max_r = 1/6
+        fprs = self.fprs
+        tprs = self.tprs
+        kappa = self.kappa
+        alpha = self.alpha
+        P = self.P
+        N = self.N
+        min_r = self.min_r
+        max_r = self.max_r
 
         test_max_points, test_ts = _geometry_jax.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
         max_points, ts = _geometry.max_area_per_t(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
@@ -468,17 +463,26 @@ class TestGeometry(unittest.TestCase):
             self.assertAlmostEqual(float(test_max_points[i]), float(max_points[i]), places=6)
             self.assertAlmostEqual(float(test_ts[i]), float(ts[i]), places=6)
 
+    def setUp(self):
+        self.fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
+        self.tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        self.kappa = 20
+        self.alpha = 0.3
+        self.P = 10
+        self.N = 100
+        self.min_r = 1/9
+        self.max_r = 1/6
+
     def test_voros(self):
-        fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
-        tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        fprs = self.fprs
+        tprs = self.tprs
+        kappa = self.kappa
+        alpha = self.alpha
+        P = self.P
+        N = self.N
 
-        kappa = 30
-        alpha = 0.2
-        P = 10
-        N = 100
-
-        min_r = 1/9
-        max_r = 1/6
+        min_r = self.min_r
+        max_r = self.max_r
         start = time.perf_counter()
         test_vor = _geometry_jax.voros_jax(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
         end = time.perf_counter()
@@ -492,16 +496,15 @@ class TestGeometry(unittest.TestCase):
         print(f"voros: {test_vor}")
 
     def test_voros_1(self):
-        fprs = jnp.array([0.0, 0.2, 0.3, 0.4, 0.8, 1.0])
-        tprs = jnp.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        fprs = self.fprs
+        tprs = self.tprs
+        kappa = self.kappa
+        alpha = self.alpha
+        P = self.P
+        N = self.N
 
-        kappa = 20
-        alpha = 0.3
-        P = 10
-        N = 100
-
-        min_r = 1/9
-        max_r = 1/6
+        min_r = self.min_r
+        max_r = self.max_r
         
         start_t = time.perf_counter()
         test_vor = _geometry_jax.voros_jax(fprs, tprs, kappa, alpha, P, N, min_r, max_r)
@@ -515,5 +518,127 @@ class TestGeometry(unittest.TestCase):
         self.assertAlmostEqual(float(test_vor), float(vor), places=6)
 
         print(f"voros: {test_vor}")
+
+    def test_grad_without_error(self):
+        # just confirms no exceptions, no NaNs sneaking through the trace
+        grad_fn = jax.grad(_geometry_jax.voros_jax, argnums=(0, 1))
+        try:
+            fprs = self.fprs
+            tprs = self.tprs
+            kappa = self.kappa
+            alpha = self.alpha
+            P = self.P
+            N = self.N
+
+            min_r = self.min_r
+            max_r = self.max_r
+
+            grad = grad_fn(
+                fprs, tprs, kappa, alpha, P, N, min_r, max_r
+            )
+        except Exception as e:
+            self.fail(f"jax.grad raised an exception: {e}")
+
+    def test_grad_shape_and_dtype(self):
+        grad_fn = jax.grad(_geometry_jax.voros_jax, argnums=(0, 1))
+        fprs = self.fprs
+        tprs = self.tprs
+
+        kappa = self.kappa
+        alpha = self.alpha
+        P = self.P
+        N = self.N
+
+        min_r = self.min_r
+        max_r = self.max_r
+        g_fpr, g_tpr = grad_fn(
+            fprs, tprs, kappa, alpha, P, N, min_r, max_r
+        )
+        self.assertEqual(g_fpr.shape, fprs.shape)
+        self.assertEqual(g_tpr.shape, tprs.shape)
+        self.assertEqual(g_fpr.dtype, fprs.dtype)
+
+    def test_grad_no_nan_or_inf(self):
+        grad_fn = jax.grad(_geometry_jax.voros_jax, argnums=(0, 1))
+        fprs = self.fprs
+        tprs = self.tprs
+
+        kappa = self.kappa
+        alpha = self.alpha
+        P = self.P
+        N = self.N
+
+        min_r = self.min_r
+        max_r = self.max_r
+        g_fpr, g_tpr = grad_fn(
+            fprs, tprs, kappa, alpha, P, N, min_r, max_r
+        )
+        for name, g in [("fpr", g_fpr), ("tpr", g_tpr)]:
+            self.assertFalse(jnp.any(jnp.isnan(g)), f"NaN in grad w.r.t. {name}")
+            self.assertFalse(jnp.any(jnp.isinf(g)), f"Inf in grad w.r.t. {name}")
+
+    # def test_double_grad_without_error(self):
+    #     # just confirms no exceptions, no NaNs sneaking through the trace
+    #     double_grad_fn = jax.grad(jax.grad(_geometry_jax.voros_jax, argnums=(0, 1)), argnums=(0, 1))
+    #     try:
+    #         fprs = self.fprs
+    #         tprs = self.tprs
+    #         kappa = self.kappa
+    #         alpha = self.alpha
+    #         P = self.P
+    #         N = self.N
+
+    #         min_r = self.min_r
+    #         max_r = self.max_r
+
+    #         double_grad = double_grad_fn(
+    #             fprs, tprs, kappa, alpha, P, N, min_r, max_r
+    #         )
+    #     except Exception as e:
+    #         self.fail(f"jax.grad raised an exception: {e}")
+
+    # def test_double_grad_shape_and_dtype(self):
+    #     double_grad_fn = jax.grad(jax.grad(_geometry_jax.voros_jax, argnums=(0, 1)), argnums=(0, 1))
+    #     fprs = self.fprs
+    #     tprs = self.tprs
+
+    #     kappa = self.kappa
+    #     alpha = self.alpha
+    #     P = self.P
+    #     N = self.N
+
+    #     min_r = self.min_r
+    #     max_r = self.max_r
+    #     g_fpr_fpr, g_fpr_tpr, g_tpr_fpr, g_tpr_tpr = double_grad_fn(
+    #         fprs, tprs, kappa, alpha, P, N, min_r, max_r
+    #     )
+    #     self.assertEqual(g_fpr_fpr.shape, fprs.shape)
+    #     self.assertEqual(g_fpr_tpr.shape, tprs.shape)
+    #     self.assertEqual(g_tpr_fpr.shape, fprs.shape)
+    #     self.assertEqual(g_tpr_tpr.shape, tprs.shape)
+    #     self.assertEqual(g_fpr_fpr.dtype, fprs.dtype)
+    #     self.assertEqual(g_fpr_tpr.dtype, tprs.dtype)
+    #     self.assertEqual(g_tpr_fpr.dtype, fprs.dtype)
+    #     self.assertEqual(g_tpr_tpr.dtype, tprs.dtype)
+    
+    # def test_double_grad_no_nan_or_inf(self):
+    #     double_grad_fn = jax.grad(jax.grad(_geometry_jax.voros_jax, argnums=(0, 1)), argnums=(0, 1))
+    #     fprs = self.fprs
+    #     tprs = self.tprs
+
+    #     kappa = self.kappa
+    #     alpha = self.alpha
+    #     P = self.P
+    #     N = self.N
+
+    #     min_r = self.min_r
+    #     max_r = self.max_r
+    #     g_fpr_fpr, g_fpr_tpr, g_tpr_fpr, g_tpr_tpr = double_grad_fn(
+    #         fprs, tprs, kappa, alpha, P, N, min_r, max_r
+    #     )
+    #     for name, g in [("fpr_fpr", g_fpr_fpr), ("fpr_tpr", g_fpr_tpr), ("tpr_fpr", g_tpr_fpr), ("tpr_tpr", g_tpr_tpr)]:
+    #         self.assertFalse(jnp.any(jnp.isnan(g)), f"NaN in double grad w.r.t. {name}")
+    #         self.assertFalse(jnp.any(jnp.isinf(g)), f"Inf in double grad w.r.t. {name}")
+
 if __name__ == '__main__':
     unittest.main()
