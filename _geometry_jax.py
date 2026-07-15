@@ -46,7 +46,7 @@ def area(polygon_points):
     sorted_idx = jnp.argsort(sorted_angles)
     ordered_poly = valid_vertices[sorted_idx]
     
-    ##### SHOELACE FORMULA
+    ##### SHOELACE FORMULA #####
     x = ordered_poly[:, 0]
     y = ordered_poly[:, 1]
     
@@ -65,7 +65,7 @@ def area(polygon_points):
     closure_term = 0.5 * jnp.abs(last_pt[0] * first_pt[1] - last_pt[1] * first_pt[0])
     
     # If the polygon had less than 3 unique vertices, the real area is 0.0
-    # Otherwise area = shoelace formula
+    # Otherwise area = shoelace formula result
     final_area = jnp.where(num_valid < 3, 0.0, raw_area + closure_term)
     
     return jnp.where(jnp.any(is_nan), 0.0, final_area)
@@ -89,7 +89,7 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     curr_pts = poly
     next_pts = jnp.roll(poly, -1, axis=0)
     
-    # Evaluate half-plane: value <= 1e-12 (less than 0 plus tol) 
+    # Evaluate half-plane: value <= 1e-12 (less than 0 plus tolerance) 
     # means the point is INSIDE the boundary half plane
     v_curr = a * curr_pts[:, 0] + b * curr_pts[:, 1] - c
     v_next = a * next_pts[:, 0] + b * next_pts[:, 1] - c
@@ -98,24 +98,27 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     curr_inside = v_curr <= 1e-12
     next_inside = v_next <= 1e-12
     
-    # Calculate exact edge intersections
+    # Calculate edge intersections
     denom = v_curr - v_next
-    safe_denom = jnp.where(jnp.abs(denom) < 1e-15, 1e-15, denom) #in case edge is parallel to clipping line
+    safe_denom = jnp.where(jnp.abs(denom) < 1e-15, 1e-15, denom)
     t = jnp.clip(v_curr / safe_denom, 0.0, 1.0)
     intersections = curr_pts + t[:, None] * (next_pts - curr_pts)
     
-    # --- EDGE CONDITIONAL ASSIGNMENTS ---
+    # Cases for edges (part of algorithm)
     crossed = (curr_inside != next_inside)
+    # Case 1: if the edge crossed the halfplane, add the intersection
+    # Case 2: if we stayed in the halfplane, add the second point
+    # Case 3: point is outside, add the intersection (gets removed at end)
     pt_A = jnp.where(crossed[:, None], intersections, 
                      jnp.where(next_inside[:, None], next_pts, intersections))
-    
+    # Case 4: if the edge entered the halfplane, add the intersection (case 1) and the next pt
     use_next_B = (~curr_inside) & next_inside
     pt_B = jnp.where(use_next_B[:, None], next_pts, pt_A)
     
     # Flatten array to build initial fixed array shape (2*N, 2)
     output = jnp.stack([pt_A, pt_B], axis=1).reshape(2 * N, 2)
     
-    # --- OUTSIDE CLEANUP --- 
+    # Clean up points outside the halfplane
     v_out = a * output[:, 0] + b * output[:, 1] - c
     # Floating point precision tolerance
     is_outside = v_out > 1e-12 
@@ -128,7 +131,7 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     # Force any remaining outside coordinate noise to the local anchor
     clipped_poly = jnp.where(is_outside[:, None], local_anchor, output)
     
-    # --- EMPTY OBLITERATION STEP ---
+    # Check the polygon is still valid/not empty
     has_nan = jnp.any(jnp.isnan(poly))
     is_still_valid = any_survived & (~has_nan)
     
@@ -145,21 +148,14 @@ def _intersect_halfplanes(halfplanes, bbox=((0, 0), (1, 1))):
     """
     (x0, y0), (x1, y1) = bbox
     
-    # 1. Initialize our starting box as a JAX array
-    # We must explicitly pad/over-allocate the array size upfront.
-    # Each half-plane clip can potentially double the number of slots needed.
-    # For M half-planes, starting with 4 vertices, a safe allocation size is 4 * (2**M),
-    # or you can set a safe maximum upper bound (e.g., 32 or 64 slots) depending on M.
+    # Each half-plane clip can potentially double the number of slots needed
     M = halfplanes.shape[0]
     max_vertices = 4 * (2 ** M)  
     
-    # Start with a pristine CCW square, padded with duplicate coordinates
+    # ROC square
     poly = jnp.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=jnp.float64)
-    # poly = jnp.tile(init_poly, (2 ** M, 1)) 
     
-    # 2. Sequentially apply each halfplane step using jax.lax.fori_loop 
-    # or a standard Python loop (Python loops are perfectly fine here because 
-    # M, the number of half-planes, is a static structural property)
+    # Sequentially clip each halfplane
     for i in range(M):
         a = halfplanes[i, 0]
         b = halfplanes[i, 1]
