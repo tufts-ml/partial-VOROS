@@ -65,19 +65,28 @@ def train_logistic_regression(x, y, test_split=0.3):
     return fprs, tprs, thresholds, (x_train, x_test, y_train, y_test, model)
 
 
-def compute_voros_with_grad(fprs_np, tprs_np):
+def compute_voros_with_grad(fprs_np, tprs_np, thresholds):
     """Compute VOROS and its gradients w.r.t. fprs and tprs."""
     # Convert to JAX arrays
     fprs = jnp.array(fprs_np, dtype=jnp.float64)
     tprs = jnp.array(tprs_np, dtype=jnp.float64)
+
+    
     
     # Define function for gradient computation
     def voros_fn(fprs, tprs):
+        _, acc_fprs, acc_tprs, _, _ = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, ALPHA, KAPPA, N, P)
         return _geometry_jax.voros_jax(
-            fprs, tprs, KAPPA, ALPHA, P, N,
+            acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
             MIN_FP_COST_RATIO, MAX_FP_COST_RATIO,
             n_points=N_POINTS
         )
+    
+    #seed_101_201.npy          0.45376815      0.030634     8.309344     5.228810    
+    # seed_301_101.npy          0.52111534      0.003692     6.850775     5.522175    
+    # seed_501_801.npy          0.41979014      0.004380     6.981345     5.799712    
+    # seed_601_201.npy          0.18408351      0.003395     7.382513     5.986687    
+    # seed_701_501.npy          0.33480578      0.003725     7.584218     5.815149 
     
     # Compute VOROS
     start_time = time.perf_counter()
@@ -125,7 +134,7 @@ def main():
             
             # Compute VOROS and gradients
             print("\nComputing VOROS and gradients...")
-            voros_value, grad_fprs, grad_tprs, voros_time, grad_time = compute_voros_with_grad(fprs, tprs)
+            voros_value, grad_fprs, grad_tprs, voros_time, grad_time = compute_voros_with_grad(fprs, tprs, thresholds)
             
             # Store results
             results[seed_file] = {

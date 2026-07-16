@@ -560,7 +560,7 @@ def _kept_on_valid(fprs_v, tprs_v, thresholds_v, alpha, kappa, N_v, P_v):
     Returns (mask, acc_fprs, acc_tprs, acc_thresholds, satisfy).
     If no points satisfy, falls back to all points with satisfy=False.
     """
-    mask = np.array(
+    mask = jnp.array(
         [keep_model(fpr, tpr, alpha, kappa, N_v, P_v) for fpr, tpr in zip(fprs_v, tprs_v)],
         dtype=bool,
     )
