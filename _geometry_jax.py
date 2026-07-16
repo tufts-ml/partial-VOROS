@@ -140,6 +140,43 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     
     return final_poly
 
+def _sort_and_clean_polygon(poly):
+    """
+    Cleans and sorts a padded JAX polygon counter-clockwise.
+    Collapses all redundant padding points onto the last valid boundary vertex
+    to preserve sequential edge order for downstream clipping steps.
+    """
+    is_nan = jnp.isnan(poly[:, 0])
+    clean_poly = jnp.where(is_nan[:, None], 0.0, poly)
+    
+    # 1. Identify unique vertices by comparing with consecutive neighbors
+    diffs = jnp.abs(clean_poly - jnp.roll(clean_poly, 1, axis=0))
+    is_unique_edge = jnp.any(diffs > 1e-12, axis=1)
+    num_valid = jnp.sum(is_unique_edge)
+    
+    # 2. Compute the geometric centroid using only unique coordinates
+    valid_vertices = jnp.where(is_unique_edge[:, None], clean_poly, 0.0)
+    cx = jnp.sum(valid_vertices[:, 0]) / (num_valid + 1e-15)
+    cy = jnp.sum(valid_vertices[:, 1]) / (num_valid + 1e-15)
+    
+    # 3. Calculate polar angles relative to the centroid
+    angles = jnp.arctan2(clean_poly[:, 1] - cy, clean_poly[:, 0] - cx)
+    
+    # 4. Push duplicate padding points to the end of the array (high angle)
+    sorted_angles = jnp.where(is_unique_edge, angles, 10.0)
+    sorted_idx = jnp.argsort(sorted_angles)
+    ordered_poly = clean_poly[sorted_idx]
+    
+    # 5. Collapse all trailing padding vertices onto the last valid boundary vertex
+    # This prevents zero-area "wings" from warping downstream edge iterations
+    last_valid_val = ordered_poly[jnp.clip(num_valid - 1, 0, poly.shape[0] - 1)]
+    idx_arr = jnp.arange(poly.shape[0])
+    is_pad = idx_arr >= num_valid
+    
+    final_ordered_poly = jnp.where(is_pad[:, None], last_valid_val, ordered_poly)
+    
+    # Propagate NaN status if the entire polygon was already invalid
+    return jnp.where(is_nan[:, None], jnp.nan, final_ordered_poly)
 
 def _intersect_halfplanes(halfplanes, bbox=((0, 0), (1, 1))):
     """Intersect half-planes (a,b,c) representing a*x + b*y <= c within initial bbox square.
@@ -161,6 +198,7 @@ def _intersect_halfplanes(halfplanes, bbox=((0, 0), (1, 1))):
         b = halfplanes[i, 1]
         c = halfplanes[i, 2]
         poly = _clip_polygon_with_halfplane(poly, a, b, c)
+        poly = _sort_and_clean_polygon(poly)
         
     return poly
 
@@ -303,6 +341,7 @@ def reduced_area(h, k, κ, α, P, N, fp_cost_ratio, return_percent=True,
     # 2. Compute iso-performance line and clip
     a, b, c = _iso_performance_line(h, k, t)
     iso_poly = _clip_polygon_with_halfplane(total_poly, a, b, c)
+    iso_poly = _sort_and_clean_polygon(iso_poly)
     
     # 3. Calculate raw intersection area
     raw_area = area(iso_poly)
