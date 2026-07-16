@@ -3,8 +3,9 @@ from sklearn.metrics import roc_curve
 import _geometry_jax
 import _geometry
 import jax.numpy as jnp
+import jax
 
-def pvoros_score_jax(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio,
+def pvoros_score(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio,
                  n_points=1000):
     """Partial VOROS score with precision and capacity constraints.
 
@@ -51,3 +52,72 @@ def pvoros_score_jax(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_f
         j_fprs, j_tprs, feasible, kappa, alpha, P, N,
         min_fp_cost_ratio, max_fp_cost_ratio, n_points=n_points,
     ))
+
+def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
+    """Computes a differentiable soft approximation of FPR and TPR.
+    
+    Args:
+        y_true: Binary ground truth labels of shape (N,)
+        y_pred: Predicted probabilities of shape (N,)
+        thresholds: Sorted evaluation thresholds of shape (M,)
+        temp: Temperature parameter. Smaller values get closer to the real 
+              step function, but make gradients sharper/harder to optimize.
+    """
+    # Reshape for broadcasting: (N, 1) and (1, M)
+    y_true_col = y_true[:, None]
+    y_pred_col = y_pred[:, None]
+    thresh_row = thresholds[None, :]
+    
+    # Soft approximation of indicator I(y_pred >= threshold)
+    soft_indicators = jax.nn.sigmoid((y_pred_col - thresh_row) / temp)
+    
+    # Target class masks
+    pos_mask = y_true_col
+    neg_mask = 1.0 - y_true_col
+    
+    # Compute soft True Positives and False Positives
+    soft_tps = jnp.sum(soft_indicators * pos_mask, axis=0)
+    soft_fps = jnp.sum(soft_indicators * neg_mask, axis=0)
+    
+    # Actual positive/negative counts (safe division)
+    P = jnp.maximum(jnp.sum(pos_mask), 1e-5)
+    N = jnp.maximum(jnp.sum(neg_mask), 1e-5)
+    
+    # Output soft curves
+    soft_tprs = soft_tps / P
+    soft_fprs = soft_fps / N
+    
+    return soft_fprs, soft_tprs
+
+def pvoros_loss(params, X, y_true, kappa, alpha, thresholds, temp=0.03):
+    """Differentiable Partial VOROS loss function."""
+    w, b = params
+
+    # 1. Forward Pass
+    logits = jnp.dot(X, w) + b
+    y_pred = jax.nn.sigmoid(logits)
+
+    P = jnp.sum(y_true == 1)
+    N = jnp.sum(y_true == 0)
+
+    # 2. Compute differentiable soft curves instead of discrete roc_curve
+    fprs, tprs = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+
+    # 3. Call JAX-compatible VOROS function
+    vor = _geometry_jax.voros_jax(
+        fprs=fprs,
+        tprs=tprs,
+        κ=kappa,
+        α=alpha,
+        P=P,
+        N=N,
+        min_fp_cost_ratio=0.1,  
+        max_fp_cost_ratio=0.9,
+        n_points=200,           
+        thresholds=thresholds  # Must pass your defined array of thresholds here
+    )
+
+    return -vor
+
+
+
