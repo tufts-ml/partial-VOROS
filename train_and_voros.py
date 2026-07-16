@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Train logistic regression models on each seed and compute VOROS with gradients."""
 
+import sys
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -57,6 +58,28 @@ def soft_set_sigmoid(y_true_N, y_pred_N, tau, k):
     return tp, fp, tn, fn
 
 
+def sigmoid_jax(x, k=SIGMOID_K):
+    """JAX sigmoid approximation for soft thresholding."""
+    return jax.nn.sigmoid(k * x)
+
+
+def soft_set_sigmoid_jax(y_true_N, y_scores_N, tau, k):
+    """Compute soft TP, FP, TN, FN using JAX-compatible sigmoid smoothing."""
+    y_true = jnp.asarray(y_true_N, dtype=jnp.float64)
+    y_scores = jnp.asarray(y_scores_N, dtype=jnp.float64)
+    soft_pred = sigmoid_jax(y_scores - tau, k)
+
+    pos_mask = y_true
+    neg_mask = 1.0 - y_true
+
+    tp = jnp.sum(soft_pred * pos_mask)
+    fn = jnp.sum((1.0 - soft_pred) * pos_mask)
+    fp = jnp.sum(soft_pred * neg_mask)
+    tn = jnp.sum((1.0 - soft_pred) * neg_mask)
+
+    return tp, fp, tn, fn
+
+
 def compute_smoothed_fprs_tprs(y_test, y_scores, thresholds):
     """Compute smoothed FPR and TPR using sigmoid approximation."""
     fprs_smooth = np.zeros(len(thresholds), dtype=float)
@@ -68,6 +91,82 @@ def compute_smoothed_fprs_tprs(y_test, y_scores, thresholds):
         tprs_smooth[t] = tp / (tp + fn) if (tp + fn) > 0 else 0
     
     return fprs_smooth, tprs_smooth
+
+
+def compute_smoothed_fprs_tprs_jax(y_test, y_scores, thresholds):
+    """Compute smoothed FPR and TPR using JAX and sigmoid approximation."""
+    def one_threshold(tau):
+        tp, fp, tn, fn = soft_set_sigmoid_jax(y_test, y_scores, tau, SIGMOID_K)
+        tpr = tp / jnp.maximum(tp + fn, 1e-15)
+        fpr = fp / jnp.maximum(fp + tn, 1e-15)
+        return fpr, tpr
+
+    fprs_smooth, tprs_smooth = jax.vmap(one_threshold)(thresholds)
+    return fprs_smooth, tprs_smooth
+
+
+def jax_voros_loss(params, x_val, y_val, thresholds, P, N):
+    """Negative VOROS loss for JAX-based logistic regression."""
+    logits = jnp.dot(x_val, params['w']) + params['b']
+    y_scores = jax.nn.sigmoid(logits)
+    fprs_smooth, tprs_smooth = compute_smoothed_fprs_tprs_jax(y_val, y_scores, thresholds)
+    voros_val = _geometry_jax.voros_jax(
+        fprs_smooth, tprs_smooth, KAPPA, ALPHA, P, N,
+        MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
+    )
+    return -voros_val
+
+
+def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=200, n_thresholds=100, test_split=0.3):
+    """Train a logistic regression model by minimizing negative JAX VOROS."""
+    x, y = load_seed_data(seed_filename)
+    n_samples = len(y)
+    n_test = int(n_samples * test_split)
+    indices = np.random.permutation(n_samples)
+    test_idx = indices[:n_test]
+    train_idx = indices[n_test:]
+
+    x_train, x_val = x[train_idx], x[test_idx]
+    y_train, y_val = y[train_idx], y[test_idx]
+
+    P = int(np.sum(y_train))
+    N = int(np.sum(1 - y_train))
+
+    x_val_jax = jnp.asarray(x_val, dtype=jnp.float64)
+    y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
+    eps = 1e-6
+    thresholds_jax = jnp.linspace(eps, 1.0 - eps, n_thresholds, dtype=jnp.float64)
+
+    params = {
+        'w': jnp.zeros((x.shape[1],), dtype=jnp.float64),
+        'b': jnp.array(0.0, dtype=jnp.float64),
+    }
+
+    loss_and_grad = jax.value_and_grad(jax_voros_loss)
+    history = []
+
+    for step in range(1, n_steps + 1):
+        loss_val, grads = loss_and_grad(params, x_val_jax, y_val_jax, thresholds_jax, P, N)
+        params = {
+            'w': params['w'] - learning_rate * grads['w'],
+            'b': params['b'] - learning_rate * grads['b'],
+        }
+        history.append((float(loss_val), float(jnp.linalg.norm(grads['w'])), float(abs(grads['b']))))
+        if step % max(1, n_steps // 10) == 0 or step == 1:
+            print(f"step={step:4d} loss={float(loss_val):.6f} w_norm={float(jnp.linalg.norm(params['w'])):.6f}")
+
+    final_voros = -jax_voros_loss(params, x_val_jax, y_val_jax, thresholds_jax, P, N)
+    return params, history, float(final_voros), P, N, x_val_jax, y_val_jax, thresholds_jax
+
+
+def run_jax_gradient_descent_on_seed(seed_filename='seed_101_201.npy'):
+    """Run JAX gradient descent on a single seed file."""
+    print(f"Running JAX gradient descent with VOROS loss on {seed_filename}")
+    params, history, voros_val, P, N, x_val_jax, y_val_jax, thresholds_jax = train_jax_voros_logistic(
+        seed_filename, learning_rate=0.1, n_steps=200, n_thresholds=101, test_split=0.3
+    )
+    print(f"Final validation VOROS: {voros_val:.8f}")
+    return params, history, voros_val, P, N, x_val_jax, y_val_jax, thresholds_jax
 
 
 def load_seed_data(seed_filename):
@@ -301,4 +400,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    run_jax_gradient_descent_on_seed('seed_501_801.npy')
