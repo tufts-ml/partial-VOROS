@@ -376,7 +376,7 @@ def keep_model(fpr, tpr, target_prec, target_cap, count_N, count_P):
     satisfies_capacity = (tpr - upper_bound) <= 1e-6
     satisfies_precision = (lower_bound - tpr) <= 1e-6
 
-    return satisfies_precision and satisfies_capacity
+    return jnp.logical_and(satisfies_precision, satisfies_capacity)
 
 
 # ---- Cost ratio / t conversions ----
@@ -560,21 +560,30 @@ def _kept_on_valid(fprs_v, tprs_v, thresholds_v, alpha, kappa, N_v, P_v):
     Returns (mask, acc_fprs, acc_tprs, acc_thresholds, satisfy).
     If no points satisfy, falls back to all points with satisfy=False.
     """
-    mask = jnp.array(
-        [keep_model(fpr, tpr, alpha, kappa, N_v, P_v) for fpr, tpr in zip(fprs_v, tprs_v)],
-        dtype=bool,
-    )
-    if mask.any():
-        acc_fprs_v = fprs_v[mask]
-        acc_tprs_v = tprs_v[mask]
-        acc_thresholds_v = thresholds_v[mask]
-        satisfy = True
-    else:
-        # fallback: no feasible point found; use full arrays
-        acc_fprs_v = fprs_v
-        acc_tprs_v = tprs_v
-        acc_thresholds_v = thresholds_v
-        satisfy = False
+    # 1. Evaluate your constraints (assuming keep_model_jax is JAX-safe)
+    vmap_keep = jax.vmap(lambda f, t: keep_model(f, t, alpha, kappa, N_v, P_v))
+    mask = vmap_keep(fprs_v, tprs_v)
+    
+    satisfy = jnp.any(mask)
+    
+    # 2. Cumulative scanning to find the last valid indices for padding.
+    # We want to replace masked-out elements with the last valid element 
+    # instead of introducing NaNs.
+    idx = jnp.arange(len(fprs_v))
+    valid_idx = jnp.where(mask, idx, -1)
+    
+    # This propagates the index of the last True value forward
+    first_valid_idx = jnp.argmax(mask)
+    fill_idx = jnp.maximum.accumulate(valid_idx)
+    
+    # If the first element is False, it remains -1. Handle this by snapping to 0.
+    fill_idx = jnp.where(fill_idx == -1, first_valid_idx, fill_idx)
+    
+    # 3. Choose between the clean filtered arrays and the global fallback
+    acc_fprs_v = jnp.where(satisfy, fprs_v[fill_idx], fprs_v)
+    acc_tprs_v = jnp.where(satisfy, tprs_v[fill_idx], tprs_v)
+    acc_thresholds_v = jnp.where(satisfy, thresholds_v[fill_idx], thresholds_v)
+    
     return mask, acc_fprs_v, acc_tprs_v, acc_thresholds_v, satisfy
 
 
