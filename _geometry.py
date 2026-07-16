@@ -10,8 +10,6 @@ import numpy as np
 import scipy.integrate
 from typing import Optional
 
-import _geometry_jax
-
 
 # ---- Polygon area ----
 
@@ -41,8 +39,8 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     poly: list of (x,y) vertices in order (convex assumed)
     Returns new list of vertices (may be empty).
     """
-    # if not poly:
-    #     return []
+    if not poly:
+        return []
 
     def inside(pt):
         """Is point inside half-plane?"""
@@ -205,10 +203,6 @@ def reduced_area(h, k, κ, α, P, N, fp_cost_ratio, return_percent=True,
     a, b, c = _iso_performance_line(h, k, t)
     # Intersect total polygon with iso half-plane
     iso_poly = _clip_polygon_with_halfplane(total_poly, a, b, c)
-    # print("ref iso_poly:", iso_poly)
-    jax_total_poly_area, jax_total_poly = _geometry_jax.total_region_area(P, N, α, κ)
-    # print("JAX total_poly (input to clip):", np.array(jax_total_poly))
-    # print("REF total_poly (input to clip):", np.array(total_poly))
     raw_area = abs(area(iso_poly)) if iso_poly else 0.0
     value = raw_area / total_poly_area if return_percent else raw_area
     if return_total_area and return_details:
