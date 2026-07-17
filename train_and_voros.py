@@ -10,6 +10,7 @@ from sklearn.metrics import roc_curve
 import _geometry_jax
 import _geometry
 import time
+import matplotlib.pyplot as plt
 
 np.random.seed(42)  # For reproducibility of train-test split
 
@@ -25,7 +26,7 @@ SEEDS = [
 ]
 
 # VOROS parameters
-KAPPA = 30
+KAPPA_FRAC = 0.5
 ALPHA = 0.2
 # P and N are calculated from dataset prevalence
 MIN_FP_COST_RATIO = 1/9
@@ -33,7 +34,7 @@ MAX_FP_COST_RATIO = 1/6
 N_POINTS = 1000
 
 # Sigmoid approximation parameters
-SIGMOID_K = 50  # Steepness of sigmoid
+SIGMOID_K = 10  # Steepness of sigmoid
 
 
 def sigmoid_approximation(p, tau, k):
@@ -105,19 +106,41 @@ def compute_smoothed_fprs_tprs_jax(y_test, y_scores, thresholds):
     return fprs_smooth, tprs_smooth
 
 
-def jax_voros_loss(params, x_val, y_val, thresholds, P, N):
-    """Negative VOROS loss for JAX-based logistic regression."""
+def jax_voros_loss(params, x_val, y_val, P, N):  # Remove thresholds from signature
+    """Negative VOROS loss with internal dynamic threshold grid scaling."""
     logits = jnp.dot(x_val, params['w']) + params['b']
     y_scores = jax.nn.sigmoid(logits)
+
+    KAPPA = KAPPA_FRAC*(P+N)
+
+    # Calculate prediction span dynamically inside the traced function
+    eps = 1e-5
+    thresholds = jnp.linspace(eps, 1.0 - eps, 100)
+    
     fprs_smooth, tprs_smooth = compute_smoothed_fprs_tprs_jax(y_val, y_scores, thresholds)
+    
+    # Filter points
+    _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(
+        fprs_smooth, tprs_smooth, thresholds, ALPHA, KAPPA, N, P
+    )
+    
+    # Calculate raw VOROS area
     voros_val = _geometry_jax.voros_jax(
-        fprs_smooth, tprs_smooth, KAPPA, ALPHA, P, N,
+        acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
         MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
     )
-    return -voros_val
+    
+    # CRITICAL: Cap the area at the true geometric bounds of your feasible region envelope
+    total_envelope_area, _ = _geometry_jax.total_region_area(P, N, ALPHA, KAPPA)
+    safe_voros = jnp.minimum(voros_val, total_envelope_area)
+    
+    # Zero out completely if the curve does not pass the filters
+    final_voros = jnp.where(satisfy, safe_voros, 0.0)
+    
+    return -final_voros
 
 
-def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=200, n_thresholds=100, test_split=0.3):
+def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_thresholds=100, test_split=0.3):
     """Train a logistic regression model by minimizing negative JAX VOROS."""
     x, y = load_seed_data(seed_filename)
     n_samples = len(y)
@@ -129,44 +152,50 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=200, n_th
     x_train, x_val = x[train_idx], x[test_idx]
     y_train, y_val = y[train_idx], y[test_idx]
 
-    P = int(np.sum(y_train))
-    N = int(np.sum(1 - y_train))
+    # Derive absolute counts from dataset dimensions
+    P = int(np.sum(y_val)) # Validation positive count
+    N = int(np.sum(1 - y_val)) # Validation negative count
+    n_val = len(y_val)
 
+    # Convert your fractional setting to an absolute integer count for the geometry engines
     x_val_jax = jnp.asarray(x_val, dtype=jnp.float64)
     y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
     eps = 1e-6
-    thresholds_jax = jnp.linspace(eps, 1.0 - eps, n_thresholds, dtype=jnp.float64)
+    # thresholds_jax = jnp.linspace(eps, 1.0 - eps, n_thresholds, dtype=jnp.float64)
 
     params = {
-        'w': jnp.zeros((x.shape[1],), dtype=jnp.float64),
-        'b': jnp.array(0.0, dtype=jnp.float64),
+        'w': jnp.array((-1,0.2), dtype=jnp.float64),
+        'b': jnp.array(0.3, dtype=jnp.float64),
     }
 
     loss_and_grad = jax.value_and_grad(jax_voros_loss)
     history = []
 
     for step in range(1, n_steps + 1):
-        loss_val, grads = loss_and_grad(params, x_val_jax, y_val_jax, thresholds_jax, P, N)
+        # The loss function now handles its grid tracking internally and safely
+        loss_val, grads = loss_and_grad(params, x_val_jax, y_val_jax, P, N)
+        
         params = {
             'w': params['w'] - learning_rate * grads['w'],
             'b': params['b'] - learning_rate * grads['b'],
         }
+        
         history.append((float(loss_val), float(jnp.linalg.norm(grads['w'])), float(abs(grads['b']))))
         if step % max(1, n_steps // 10) == 0 or step == 1:
             print(f"step={step:4d} loss={float(loss_val):.6f} w_norm={float(jnp.linalg.norm(params['w'])):.6f}")
 
-    final_voros = -jax_voros_loss(params, x_val_jax, y_val_jax, thresholds_jax, P, N)
-    return params, history, float(final_voros), P, N, x_val_jax, y_val_jax, thresholds_jax
+    final_voros = -jax_voros_loss(params, x_val_jax, y_val_jax, P, N)
+    return params, history, float(final_voros), P, N, x_val_jax, y_val_jax
 
 
 def run_jax_gradient_descent_on_seed(seed_filename='seed_101_201.npy'):
     """Run JAX gradient descent on a single seed file."""
     print(f"Running JAX gradient descent with VOROS loss on {seed_filename}")
-    params, history, voros_val, P, N, x_val_jax, y_val_jax, thresholds_jax = train_jax_voros_logistic(
-        seed_filename, learning_rate=0.1, n_steps=200, n_thresholds=101, test_split=0.3
+    params, history, voros_val, P, N, x_val_jax, y_val_jax = train_jax_voros_logistic(
+        seed_filename, learning_rate=0.1, n_steps=100, n_thresholds=101, test_split=0.3
     )
     print(f"Final validation VOROS: {voros_val:.8f}")
-    return params, history, voros_val, P, N, x_val_jax, y_val_jax, thresholds_jax
+    return params, history, voros_val, P, N, x_val_jax, y_val_jax
 
 
 def load_seed_data(seed_filename):
@@ -213,6 +242,8 @@ def compute_voros_with_grad(fprs_np, tprs_np, thresholds, P, N):
     # Convert to JAX arrays
     fprs = jnp.array(fprs_np, dtype=jnp.float64)
     tprs = jnp.array(tprs_np, dtype=jnp.float64)
+
+    KAPPA = KAPPA_FRAC *(P+N)
     
     # Define function for gradient computation
     def voros_fn(fprs, tprs):
@@ -241,6 +272,7 @@ def compute_voros_with_grad(fprs_np, tprs_np, thresholds, P, N):
 
 def compute_voros_numpy(fprs_np, tprs_np, thresholds, P, N):
     """Compute regular VOROS using NumPy implementation."""
+    KAPPA = KAPPA_FRAC *(P+N)
     # Define function for computation
     def voros_fn(fprs, tprs):
         _, acc_fprs, acc_tprs, _, _ = _geometry._kept_on_valid(fprs, tprs, thresholds, ALPHA, KAPPA, N, P)
@@ -263,7 +295,7 @@ def main():
     print("=" * 80)
     print("LOGISTIC REGRESSION + VOROS GRADIENT COMPUTATION")
     print("=" * 80)
-    print(f"VOROS Parameters: κ={KAPPA}, α={ALPHA}")
+    print(f"VOROS Parameters: κ_frac={KAPPA_FRAC}, α={ALPHA}")
     print(f"                  P and N are calculated from dataset prevalence")
     print(f"                  min_r={MIN_FP_COST_RATIO:.4f}, max_r={MAX_FP_COST_RATIO:.4f}")
     print(f"                  n_points={N_POINTS}\n")
@@ -402,5 +434,42 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-    # run_jax_gradient_descent_on_seed('seed_501_801.npy')
+    # main()
+    params, history, voros_val, P, N, x_val_jax, y_val_jax = run_jax_gradient_descent_on_seed('seed_501_801.npy')
+    
+    print("\nFinal Optimization Status:")
+    print(f"  Final Validation VOROS Score: {voros_val:.8f}")
+    print(f"  Final Parameter Weights (w):  {params['w']}")
+    print(f"  Final Parameter Bias (b):     {params['b']}")
+
+    # 2. Extract loss trajectory from history elements (loss is index 0)
+    # Since loss_val is stored as -VOROS, we keep it as-is to plot the loss minimization trend
+    losses = [step_data[0] for step_data in history]
+    iterations = np.arange(1, len(losses) + 1)
+
+    # 3. Generate the Optimization Performance Plot
+    plt.figure(figsize=(8, 5))
+    plt.style.use('seaborn-v0_8-whitegrid' if 'seaborn-v0_8-whitegrid' in plt.style.available else 'default')
+    
+    # Plot loss trajectory
+    plt.plot(iterations, losses, color='#1f77b4', linewidth=2, label='Soft pVOROS Loss')
+    plt.scatter(iterations[0], losses[0], color='red', s=40, zorder=5, label='Initialization')
+    plt.scatter(iterations[-1], losses[-1], color='green', s=40, zorder=5, label='Optimized Convergence')
+
+    # Formatting and labels
+    plt.title('JAX Gradient Descent: pVOROS Loss Trajectory (Seed 501_801)', fontsize=12, fontweight='bold', pad=12)
+    plt.xlabel('Gradient Descent Iteration Number', fontsize=10)
+    plt.ylabel('Loss Value (Negative Partial VOROS Score)', fontsize=10)
+    plt.xlim(0, len(losses) + 1)
+    
+    # Force y-axis limit safety constraints based on calculated metrics
+    min_loss, max_loss = min(losses), max(losses)
+    plt.ylim(min_loss - 0.05, max_loss + 0.05)
+    
+    plt.legend(loc='upper right', frameon=True, facecolor='white', edgecolor='none')
+    plt.tight_layout()
+
+    # 4. Save to directory as a vector PDF
+    output_pdf_path = 'pvoros_loss_trajectory_seed_501_801.pdf'
+    plt.savefig(output_pdf_path, format='pdf', dpi=300)
+    plt.close()

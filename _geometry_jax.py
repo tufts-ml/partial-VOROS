@@ -8,6 +8,8 @@ from typing import Optional
 from jax import config
 config.update("jax_enable_x64", True)
 
+### KAPPA IS ABSOLUTE (Ex: 30)
+
 def area(polygon_points):
     """
     Calculates the area of a polygon using the Shoelace Formula 
