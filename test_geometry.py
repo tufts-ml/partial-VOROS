@@ -5,7 +5,6 @@ import _geometry
 import jax.numpy as jnp
 import numpy as np
 import time
-import visualize_data
 
 class TestGeometry(unittest.TestCase):
     def test_area_triangle(self):
@@ -461,6 +460,49 @@ class TestGeometry(unittest.TestCase):
 
         for i in range(len(max_points)):
             self.assertAlmostEqual(float(test_max_points[i]), float(max_points[i]), places=6)
+            self.assertAlmostEqual(float(test_ts[i]), float(ts[i]), places=6)
+
+    def test_infeasible_area(self):
+        fprs = jnp.array([0.9, 0.95, 1.0])
+        tprs = jnp.array([0.0, 0.0, 0.0])
+        
+        # NumPy requires standard arrays
+        fprs_np = np.array(fprs)
+        tprs_np = np.array(tprs)
+
+        # Strict constraints to force all points out of bounds
+        alpha = 0.6
+        kappa = 0.5
+        P = 10
+        N = 100
+
+        min_r = 1/9
+        max_r = 1/6
+
+        # Execute JAX version
+        test_max_points, test_ts = _geometry_jax.max_area_per_t(
+            fprs, tprs, kappa, alpha, P, N, min_r, max_r
+        )
+        
+        # Execute NumPy version
+        max_points, ts = _geometry.max_area_per_t(
+            fprs_np, tprs_np, kappa, alpha, P, N, min_r, max_r
+        )
+
+        # 1. Structural Validation
+        self.assertEqual(len(test_max_points), len(max_points))
+        self.assertEqual(len(test_ts), len(ts))
+
+        # 2. Value Validation (Every single maximum reduced area must be exactly 0.0)
+        for i in range(len(max_points)):
+            # JAX version must evaluate to exactly 0.0 (no false -1.0 area leaks allowed)
+            self.assertAlmostEqual(float(test_max_points[i]), 0.0, places=6,
+                                   msg=f"JAX leaked area at cost ratio slice index {i}")
+            
+            # NumPy baseline check
+            self.assertAlmostEqual(float(max_points[i]), 0.0, places=6)
+            
+            # Cost transformations must still match perfectly
             self.assertAlmostEqual(float(test_ts[i]), float(ts[i]), places=6)
 
     def setUp(self):

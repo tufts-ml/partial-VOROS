@@ -126,7 +126,7 @@ def _clip_polygon_with_halfplane(poly, a, b, c):
     # Find a locally valid anchor point from this specific clipping step
     first_inside_idx = jnp.argmax(curr_inside)
     any_survived = jnp.any(curr_inside)
-    local_anchor = jnp.where(any_survived, poly[first_inside_idx], poly[0])
+    local_anchor = jnp.where(any_survived, poly[first_inside_idx], 0.0)
     
     # Force any remaining outside coordinate noise to the local anchor
     clipped_poly = jnp.where(is_outside[:, None], local_anchor, output)

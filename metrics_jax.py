@@ -103,10 +103,12 @@ def pvoros_loss(params, X, y_true, kappa, alpha, thresholds, temp=0.03):
     # 2. Compute differentiable soft curves instead of discrete roc_curve
     fprs, tprs = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
 
+    _, acc_fprs, acc_tprs, _, _ = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N, P)
+
     # 3. Call JAX-compatible VOROS function
     vor = _geometry_jax.voros_jax(
-        fprs=fprs,
-        tprs=tprs,
+        fprs=acc_fprs,
+        tprs=acc_tprs,
         κ=kappa,
         α=alpha,
         P=P,

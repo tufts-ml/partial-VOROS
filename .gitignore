@@ -180,3 +180,5 @@ seed_501_801.npy
 seed_601_201.npy
 seed_701_501.npy
 visualize_data.py
+voros_results.npy
+debugging_training.py

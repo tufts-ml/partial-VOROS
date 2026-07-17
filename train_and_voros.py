@@ -230,8 +230,10 @@ def compute_voros_with_grad(fprs_np, tprs_np, thresholds, P, N):
     
     # Compute gradients
     start_time = time.perf_counter()
-    grad_fn = jax.grad(voros_fn, argnums=(0, 1))
-    grad_fprs, grad_tprs = grad_fn(fprs, tprs)
+    # grad_fn = jax.grad(voros_fn, argnums=(0, 1))
+    # grad_fprs, grad_tprs = grad_fn(fprs, tprs)
+    grad_fn = jax.value_and_grad(voros_fn, argnums=(0,1))
+    loss, (grad_fprs, grad_tprs) = grad_fn(fprs, tprs)
     grad_time = time.perf_counter() - start_time
     
     return voros_value, grad_fprs, grad_tprs, voros_time, grad_time
@@ -400,5 +402,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    run_jax_gradient_descent_on_seed('seed_501_801.npy')
+    main()
+    # run_jax_gradient_descent_on_seed('seed_501_801.npy')
