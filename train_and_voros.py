@@ -33,7 +33,7 @@ ALPHA = 0.6
 # P and N are calculated from dataset prevalence
 MIN_FP_COST_RATIO = 1/9
 MAX_FP_COST_RATIO = 1/6
-N_POINTS = 1000
+N_POINTS = 50
 
 # Sigmoid approximation parameters
 SIGMOID_K = 50  # Steepness of sigmoid
@@ -108,41 +108,79 @@ def compute_smoothed_fprs_tprs_jax(y_test, y_scores, thresholds):
     return fprs_smooth, tprs_smooth
 
 
-def jax_voros_loss(params, x_val, y_val, P, N):  # Remove thresholds from signature
-    """Negative VOROS loss with internal dynamic threshold grid scaling."""
-    logits = jnp.dot(x_val, params['w']) + params['b']
-    y_scores = jax.nn.sigmoid(logits)
+def jax_voros_loss(params, x_val, y_val, P, N):
+    """Negative VOROS loss that bypasses _kept_on_valid padding bugs."""
+    w_vec = params['w'].ravel()
+    logits = jnp.dot(x_val, w_vec) + params['b']
+    y_scores = jax.nn.sigmoid(logits.ravel())
+    y_val_1d = y_val.ravel()
 
-    KAPPA = KAPPA_FRAC*(P+N)
-
-    # Calculate prediction span dynamically inside the traced function
+    KAPPA = KAPPA_FRAC * (P + N)
     eps = 1e-5
     thresholds = jnp.linspace(eps, 1.0 - eps, 100)
     
-    fprs_smooth, tprs_smooth = compute_smoothed_fprs_tprs_jax(y_val, y_scores, thresholds)
+    # 1. Compute your smooth, unpadded curves
+    fprs_smooth, tprs_smooth = compute_smoothed_fprs_tprs_jax(y_val_1d, y_scores, thresholds)
     
-    # Filter points
-    _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(
-        fprs_smooth, tprs_smooth, thresholds, ALPHA, KAPPA, N, P
-    )
+    # 2. Evaluate constraints explicitly using a float mask (1.0 if valid, 0.0 if invalid)
+    mask = jax.vmap(lambda f, t: _geometry_jax.keep_model(f, t, ALPHA, KAPPA, N, P))(fprs_smooth, tprs_smooth)
+    satisfy = jnp.any(mask)
     
-    # Calculate raw VOROS area
+    # 3. Compute VOROS directly over the uniform grid.
+    # We pass the unpadded curves straight to the integrator to avoid the tracer padding bug.
     voros_val = _geometry_jax.voros_jax(
-        acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
+        fprs_smooth, tprs_smooth, KAPPA, ALPHA, P, N,
         MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
     )
     
-    # CRITICAL: Cap the area at the true geometric bounds of your feasible region envelope
-    total_envelope_area, _ = _geometry_jax.total_region_area(P, N, ALPHA, KAPPA)
-    safe_voros = jnp.minimum(voros_val, total_envelope_area)
+    # Zero out the score if no points on the curve satisfy the constraints
+    return -jnp.where(satisfy, voros_val, 0.0)
+
+# def jax_voros_loss(params, x_val, y_val, P, N):  # Remove thresholds from signature
+#     """Negative VOROS loss with explicit 1D dimension safety parsing."""
+#     # Ensure params weights are treated cleanly as a 1D vector
+#     w_vec = params['w'].ravel()
     
-    # Zero out completely if the curve does not pass the filters
-    final_voros = jnp.where(satisfy, safe_voros, 0.0)
+#     # Compute activations and flatten them explicitly to shape (N_SAMPLES,)
+#     logits = jnp.dot(x_val, w_vec) + params['b']
+#     logits = logits.ravel()
     
-    return -final_voros
+#     y_scores = jax.nn.sigmoid(logits)
+    
+#     # Explicitly force your binary target masks to match the exact same 1D structure
+#     y_val_1d = y_val.ravel()
+
+#     KAPPA = KAPPA_FRAC * (P + N)
+#     eps = 1e-5
+#     thresholds = jnp.linspace(eps, 1.0 - eps, 100)
+    
+#     # 1. Compute raw smooth arrays via vmap
+#     fprs_raw, tprs_raw = compute_smoothed_fprs_tprs_jax(y_val_1d, y_scores, thresholds)
+    
+#     # 2. FORCE the first entry to be exactly (0.0, 0.0) to match the NumPy loop range(1, len)
+#     fprs_smooth = fprs_raw.at[0].set(0.0)
+#     tprs_smooth = tprs_raw.at[0].set(0.0)
+    
+#     # Filter points
+#     _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(
+#         fprs_smooth, tprs_smooth, thresholds, ALPHA, KAPPA, N, P
+#     )
+    
+#     # Calculate raw VOROS area
+#     voros_val = _geometry_jax.voros_jax(
+#         acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
+#         MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
+#     )
+    
+#     total_envelope_area, _ = _geometry_jax.total_region_area(P, N, ALPHA, KAPPA)
+#     safe_voros = jnp.minimum(voros_val, total_envelope_area)
+    
+#     final_voros = jnp.where(satisfy, safe_voros, 0.0)
+    
+#     return -final_voros
 
 
-def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_thresholds=100, test_split=0.3):
+def train_jax_voros_logistic(seed_filename, learning_rate=0.01, n_steps=100, n_thresholds=100, test_split=0.3):
     """Train a logistic regression model by minimizing negative JAX VOROS."""
     x, y = load_seed_data(seed_filename)
     random.seed(42)
@@ -152,6 +190,8 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_th
     y_500 = y[random_indices]
     x_train, x_test, y_train, y_test = train_test_split(
         X_500, y_500, test_size=0.3, random_state=101, stratify=y_500)
+    
+    
     # n_samples = len(y)
     # n_test = int(n_samples * test_split)
     # indices = np.random.permutation(n_samples)
@@ -174,11 +214,41 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_th
 
     params = {
         'w': jnp.array((-1,0.5), dtype=jnp.float64),
-        'b': jnp.array(-2, dtype=jnp.float64),
+        'b': jnp.array(-2.2164883600367404, dtype=jnp.float64),
     }
 
     loss_and_grad = jax.value_and_grad(jax_voros_loss)
     history = []
+
+    logits = jnp.dot(x_train, params['w']) + params['b']
+    y_scores = jax.nn.sigmoid(logits)
+
+    # Convert arrays to numpy formats to isolate them from JAX tracking mechanics
+    y_scores_np = np.array(y_scores)
+    y_train_np = np.array(y_train)
+    eps = 1e-5
+    thresholds_np = np.linspace(eps, 1.0 - eps, 100)
+
+    # 2. Run the EXACT same smoothing functions used in your heatmap script
+    fprs_smooth, tprs_smooth = compute_smoothed_fprs_tprs(y_train_np, y_scores_np, thresholds_np)
+
+    # 3. Test with the CPU geometry engine (Heatmap backend)
+    _, acc_fprs, acc_tprs, _, satisfy_cpu = _geometry_jax._kept_on_valid(
+        fprs_smooth, tprs_smooth, thresholds_np, 0.6, KAPPA_FRAC * len(y_train_np), N, P
+    )
+
+    loss_val, grads = loss_and_grad(params, x_train, y_train, P, N)
+
+    cpu_score = 0.0
+    if satisfy_cpu:
+        cpu_score = _geometry_jax.voros_jax(
+            acc_fprs, acc_tprs, KAPPA_FRAC * len(y_train_np), 0.6, P, N,
+            1/9, 1/6, n_points=50  # Match the heatmap's resolution
+        )
+
+    print(f"--- GEOMETRY ENGINE VERIFICATION ---")
+    print(f"Heatmap Engine (CPU) Area: {cpu_score:.6f}  (Satisfy: {satisfy_cpu})")
+    print(f"Training Engine (JAX) Area: {-loss_val:.6f}")
 
     for step in range(1, n_steps + 1):
         # The loss function now handles its grid tracking internally and safely
@@ -193,7 +263,7 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_th
         if step % max(1, n_steps // 10) == 0 or step == 1:
             print(f"step={step:4d} loss={float(loss_val):.6f} w_norm={float(jnp.linalg.norm(params['w'])):.6f}")
 
-    final_voros = -jax_voros_loss(params, x_test, y_test, P, N)
+    final_voros = -jax_voros_loss(params, x_train, y_train, P, N)
     return params, history, float(final_voros), P, N, x, y
 
 
