@@ -34,7 +34,7 @@ MAX_FP_COST_RATIO = 1/6
 N_POINTS = 1000
 
 # Sigmoid approximation parameters
-SIGMOID_K = 10  # Steepness of sigmoid
+SIGMOID_K = 30  # Steepness of sigmoid
 
 
 def sigmoid_approximation(p, tau, k):
@@ -149,22 +149,22 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_th
     test_idx = indices[:n_test]
     train_idx = indices[n_test:]
 
-    x_train, x_val = x[train_idx], x[test_idx]
-    y_train, y_val = y[train_idx], y[test_idx]
+    x_train, x_test = x[train_idx], x[test_idx]
+    y_train, y_test = y[train_idx], y[test_idx]
 
     # Derive absolute counts from dataset dimensions
-    P = int(np.sum(y_val)) # Validation positive count
-    N = int(np.sum(1 - y_val)) # Validation negative count
-    n_val = len(y_val)
+    P = int(np.sum(y_train)) # Validation positive count
+    N = int(np.sum(1 - y_train)) # Validation negative count
+    n_val = len(y_train)
 
     # Convert your fractional setting to an absolute integer count for the geometry engines
-    x_val_jax = jnp.asarray(x_val, dtype=jnp.float64)
-    y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
+    # x_val_jax = jnp.asarray(x_val, dtype=jnp.float64)
+    # y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
     eps = 1e-6
     # thresholds_jax = jnp.linspace(eps, 1.0 - eps, n_thresholds, dtype=jnp.float64)
 
     params = {
-        'w': jnp.array((-1,0.2), dtype=jnp.float64),
+        'w': jnp.array((-2,-0.5), dtype=jnp.float64),
         'b': jnp.array(0.3, dtype=jnp.float64),
     }
 
@@ -173,7 +173,7 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_th
 
     for step in range(1, n_steps + 1):
         # The loss function now handles its grid tracking internally and safely
-        loss_val, grads = loss_and_grad(params, x_val_jax, y_val_jax, P, N)
+        loss_val, grads = loss_and_grad(params, x_train, y_train, P, N)
         
         params = {
             'w': params['w'] - learning_rate * grads['w'],
@@ -184,8 +184,8 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_th
         if step % max(1, n_steps // 10) == 0 or step == 1:
             print(f"step={step:4d} loss={float(loss_val):.6f} w_norm={float(jnp.linalg.norm(params['w'])):.6f}")
 
-    final_voros = -jax_voros_loss(params, x_val_jax, y_val_jax, P, N)
-    return params, history, float(final_voros), P, N, x_val_jax, y_val_jax
+    final_voros = -jax_voros_loss(params, x_test, y_test, P, N)
+    return params, history, float(final_voros), P, N, x, y
 
 
 def run_jax_gradient_descent_on_seed(seed_filename='seed_101_201.npy'):
@@ -453,8 +453,8 @@ if __name__ == "__main__":
     
     # Plot loss trajectory
     plt.plot(iterations, losses, color='#1f77b4', linewidth=2, label='Soft pVOROS Loss')
-    plt.scatter(iterations[0], losses[0], color='red', s=40, zorder=5, label='Initialization')
-    plt.scatter(iterations[-1], losses[-1], color='green', s=40, zorder=5, label='Optimized Convergence')
+    # plt.scatter(iterations[0], losses[0], color='red', s=40, zorder=5, label='Initialization')
+    # plt.scatter(iterations[-1], losses[-1], color='green', s=40, zorder=5, label='Optimized Convergence')
 
     # Formatting and labels
     plt.title('JAX Gradient Descent: pVOROS Loss Trajectory (Seed 501_801)', fontsize=12, fontweight='bold', pad=12)

@@ -22,7 +22,7 @@ for ax, seed in zip(axs.flat, clfs):
     # Read the data back matrix location by matrix location
     for i in range(grid_size):
         for j in range(grid_size):
-            file_path = f"results_data/{seed}_res_{i}_{j}.txt"
+            file_path = f"results_data_soft_pv/{seed}_res_{i}_{j}.txt"
             try:
                 with open(file_path, 'r') as f:
                     heatmap[i, j] = float(f.read().strip())
@@ -38,11 +38,11 @@ for ax, seed in zip(axs.flat, clfs):
     fig.colorbar(im, ax=ax, label='pVOROS score')
     ax.set_xlabel('w1')
     ax.set_ylabel('w2')
-    ax.set_title(f'pVOROS Matrix: {seed}')
+    ax.set_title(f'Soft Set pVOROS Matrix: {seed}')
     ax.scatter([w1_center], [w2_center], color='white', edgecolor='black', s=80, label='Trained')
     ax.legend(loc='upper right')
 
 axs.flat[-1].set_visible(False)
 plt.tight_layout()
-plt.savefig('pvoros_surface_grid.pdf', format='pdf', dpi=300)
+plt.savefig('soft_pvoros_surface_grid.pdf', format='pdf', dpi=300)
 plt.show()
