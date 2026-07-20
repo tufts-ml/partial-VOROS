@@ -78,6 +78,7 @@ def main():
         N = int(np.sum(y_true == 0))
         kappa = kappa_frac * float(len(y_true))
         intercept = float(clfs[seed].intercept_[0])
+        print("intercept", intercept)
         
         # DYNAMIC SEARCH CENTER TRACKING
         w1_center = clfs[seed].coef_[0, 0]
@@ -111,9 +112,9 @@ def main():
             ))
             
         # Write results using the uniform grid position naming scheme
-        out_name = f"results_data_soft_pv/{seed}_res_{args.idx_i}_{args.idx_j}.txt"
-        with open(out_name, 'w') as f:
-            f.write(f"{score}\n")
+        # out_name = f"results_data_soft_pv/{seed}_res_{args.idx_i}_{args.idx_j}.txt"
+        # with open(out_name, 'w') as f:
+        #     f.write(f"{score}\n")
 
 if __name__ == "__main__":
     main()

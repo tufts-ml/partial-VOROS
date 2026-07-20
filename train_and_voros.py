@@ -7,10 +7,12 @@ import jax
 import jax.numpy as jnp
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_curve
+from sklearn.model_selection import train_test_split
 import _geometry_jax
 import _geometry
 import time
 import matplotlib.pyplot as plt
+import random
 
 np.random.seed(42)  # For reproducibility of train-test split
 
@@ -27,14 +29,14 @@ SEEDS = [
 
 # VOROS parameters
 KAPPA_FRAC = 0.5
-ALPHA = 0.2
+ALPHA = 0.6
 # P and N are calculated from dataset prevalence
 MIN_FP_COST_RATIO = 1/9
 MAX_FP_COST_RATIO = 1/6
 N_POINTS = 1000
 
 # Sigmoid approximation parameters
-SIGMOID_K = 30  # Steepness of sigmoid
+SIGMOID_K = 50  # Steepness of sigmoid
 
 
 def sigmoid_approximation(p, tau, k):
@@ -143,14 +145,21 @@ def jax_voros_loss(params, x_val, y_val, P, N):  # Remove thresholds from signat
 def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_thresholds=100, test_split=0.3):
     """Train a logistic regression model by minimizing negative JAX VOROS."""
     x, y = load_seed_data(seed_filename)
-    n_samples = len(y)
-    n_test = int(n_samples * test_split)
-    indices = np.random.permutation(n_samples)
-    test_idx = indices[:n_test]
-    train_idx = indices[n_test:]
+    random.seed(42)
+    random_indices = random.sample(range(len(y)), 500)
 
-    x_train, x_test = x[train_idx], x[test_idx]
-    y_train, y_test = y[train_idx], y[test_idx]
+    X_500 = x[random_indices]
+    y_500 = y[random_indices]
+    x_train, x_test, y_train, y_test = train_test_split(
+        X_500, y_500, test_size=0.3, random_state=101, stratify=y_500)
+    # n_samples = len(y)
+    # n_test = int(n_samples * test_split)
+    # indices = np.random.permutation(n_samples)
+    # test_idx = indices[:n_test]
+    # train_idx = indices[n_test:]
+
+    # x_train, x_test = x[train_idx], x[test_idx]
+    # y_train, y_test = y[train_idx], y[test_idx]
 
     # Derive absolute counts from dataset dimensions
     P = int(np.sum(y_train)) # Validation positive count
@@ -160,12 +169,12 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.1, n_steps=100, n_th
     # Convert your fractional setting to an absolute integer count for the geometry engines
     # x_val_jax = jnp.asarray(x_val, dtype=jnp.float64)
     # y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
-    eps = 1e-6
+    # eps = 1e-6
     # thresholds_jax = jnp.linspace(eps, 1.0 - eps, n_thresholds, dtype=jnp.float64)
 
     params = {
-        'w': jnp.array((-2,-0.5), dtype=jnp.float64),
-        'b': jnp.array(0.3, dtype=jnp.float64),
+        'w': jnp.array((-1,0.5), dtype=jnp.float64),
+        'b': jnp.array(-2, dtype=jnp.float64),
     }
 
     loss_and_grad = jax.value_and_grad(jax_voros_loss)
