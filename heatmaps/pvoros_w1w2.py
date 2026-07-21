@@ -37,27 +37,40 @@ def main():
     
     # Process each seed using its unique coefficient center
     for seed in clfs.keys():
-        y_true = np.asarray(train_test[seed][3])
-        X_test = np.asarray(train_test[seed][1])
+        y_true = np.asarray(train_test[seed][2])
+        x_train = np.asarray(train_test[seed][0])
         
         P = int(np.sum(y_true == 1))
         N = int(np.sum(y_true == 0))
         kappa = kappa_frac * float(len(y_true))
-        intercept = float(clfs[seed].intercept_[0])
         
-        # DYNAMIC SEARCH CENTER TRACKING
+        # Original params
         w1_center = clfs[seed].coef_[0, 0]
         w2_center = clfs[seed].coef_[0, 1]
+        b_center = float(clfs[seed].intercept_[0])
         
-        # Calculate the absolute target weight for this specific seed matrix
-        w1_vals = np.linspace(w1_center - 2, w1_center + 2, args.grid_size)
-        w2_vals = np.linspace(w2_center - 2, w2_center + 2, args.grid_size)
+        # Keep original weight vector magnitude constant
+        M = 1
         
-        w1 = w1_vals[args.idx_j]
-        w2 = w2_vals[args.idx_i]
+        # Deduce baseline angle and y-intercept
+        theta_center = np.arctan2(w1_center, -w2_center)
+        c_center = b_center / (M * np.cos(theta_center) + 1e-9)
         
-        # Standard fast geometric evaluation
-        logits = X_test[:, 0] * w1 + X_test[:, 1] * w2 + intercept
+        # Define ranges for grid (e.g., +/- 45 degrees, +/- 2 units on intercept)
+        theta_vals = np.linspace(theta_center - np.radians(45), theta_center + np.radians(45), args.grid_size)
+        c_vals = np.linspace(c_center - 2.0, c_center + 2.0, args.grid_size)
+        
+        # Grab current grid coordinates
+        theta_curr = theta_vals[args.idx_j]
+        c_curr = c_vals[args.idx_i]
+        
+        # Convert back to standard line equations
+        w1 = M * np.sin(theta_curr)
+        w2 = -M * np.cos(theta_curr)
+        intercept = M * c_curr * np.cos(theta_curr)
+        
+        # Fast geometric evaluation using the reparameterized elements
+        logits = x_train[:, 0] * w1 + x_train[:, 1] * w2 + intercept
         y_pred = 1.0 / (1.0 + np.exp(-logits))
         
         fprs, tprs, thrs = roc_curve(y_true, y_pred)

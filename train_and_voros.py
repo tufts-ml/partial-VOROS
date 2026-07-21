@@ -191,6 +191,8 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.01, n_steps=100, n_t
     x_train, x_test, y_train, y_test = train_test_split(
         X_500, y_500, test_size=0.3, random_state=101, stratify=y_500)
     
+    X = x_train
+    Y = y_train
     
     # n_samples = len(y)
     # n_test = int(n_samples * test_split)
@@ -202,9 +204,9 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.01, n_steps=100, n_t
     # y_train, y_test = y[train_idx], y[test_idx]
 
     # Derive absolute counts from dataset dimensions
-    P = int(np.sum(y_train)) # Validation positive count
-    N = int(np.sum(1 - y_train)) # Validation negative count
-    n_val = len(y_train)
+    P = int(np.sum(Y)) # Validation positive count
+    N = int(np.sum(1 - Y)) # Validation negative count
+    n_val = len(Y)
 
     # Convert your fractional setting to an absolute integer count for the geometry engines
     # x_val_jax = jnp.asarray(x_val, dtype=jnp.float64)
@@ -220,12 +222,12 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.01, n_steps=100, n_t
     loss_and_grad = jax.value_and_grad(jax_voros_loss)
     history = []
 
-    logits = jnp.dot(x_train, params['w']) + params['b']
+    logits = jnp.dot(X, params['w']) + params['b']
     y_scores = jax.nn.sigmoid(logits)
 
     # Convert arrays to numpy formats to isolate them from JAX tracking mechanics
     y_scores_np = np.array(y_scores)
-    y_train_np = np.array(y_train)
+    y_train_np = np.array(Y)
     eps = 1e-5
     thresholds_np = np.linspace(eps, 1.0 - eps, 100)
 
@@ -237,7 +239,7 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.01, n_steps=100, n_t
         fprs_smooth, tprs_smooth, thresholds_np, 0.6, KAPPA_FRAC * len(y_train_np), N, P
     )
 
-    loss_val, grads = loss_and_grad(params, x_train, y_train, P, N)
+    loss_val, grads = loss_and_grad(params, X, Y, P, N)
 
     cpu_score = 0.0
     if satisfy_cpu:
@@ -252,7 +254,7 @@ def train_jax_voros_logistic(seed_filename, learning_rate=0.01, n_steps=100, n_t
 
     for step in range(1, n_steps + 1):
         # The loss function now handles its grid tracking internally and safely
-        loss_val, grads = loss_and_grad(params, x_train, y_train, P, N)
+        loss_val, grads = loss_and_grad(params, X, Y, P, N)
         
         params = {
             'w': params['w'] - learning_rate * grads['w'],
