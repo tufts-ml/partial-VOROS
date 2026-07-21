@@ -57,8 +57,11 @@ def main():
         c_center = b_center / (M * np.cos(theta_center) + 1e-9)
         
         # Define ranges for grid (e.g., +/- 45 degrees, +/- 2 units on intercept)
-        theta_vals = np.linspace(theta_center - np.radians(45), theta_center + np.radians(45), args.grid_size)
-        c_vals = np.linspace(c_center - 2.0, c_center + 2.0, args.grid_size)
+        # theta_vals = np.linspace(theta_center - np.radians(45), theta_center + np.radians(45), args.grid_size)
+        # c_vals = np.linspace(c_center - 2.0, c_center + 2.0, args.grid_size)
+
+        theta_vals = np.linspace(-np.pi, np.pi)
+        c_vals = np.linspace(-3, 3, args.grid_size)
         
         # Grab current grid coordinates
         theta_curr = theta_vals[args.idx_j]

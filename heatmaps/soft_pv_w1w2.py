@@ -68,20 +68,23 @@ def main():
         kappa = kappa_frac * float(len(y_true))
         
         # Original params
-        w1_center = clfs[seed].coef_[0, 0]
-        w2_center = clfs[seed].coef_[0, 1]
-        b_center = float(clfs[seed].intercept_[0])
+        # w1_center = clfs[seed].coef_[0, 0]
+        # w2_center = clfs[seed].coef_[0, 1]
+        # b_center = float(clfs[seed].intercept_[0])
         
         # Keep original weight vector magnitude constant
         M = 1
         
         # Deduce baseline angle and y-intercept
-        theta_center = np.arctan2(w1_center, -w2_center)
-        c_center = b_center / (M * np.cos(theta_center) + 1e-9)
+        # theta_center = np.arctan2(w1_center, -w2_center)
+        # c_center = b_center / (M * np.cos(theta_center) + 1e-9)
         
         # Define ranges for grid (e.g., +/- 45 degrees, +/- 2 units on intercept)
-        theta_vals = np.linspace(theta_center - np.radians(45), theta_center + np.radians(45), args.grid_size)
-        c_vals = np.linspace(c_center - 2.0, c_center + 2.0, args.grid_size)
+        # theta_vals = np.linspace(theta_center - np.radians(45), theta_center + np.radians(45), args.grid_size)
+        # c_vals = np.linspace(c_center - 2.0, c_center + 2.0, args.grid_size)
+
+        theta_vals = np.linspace(-np.pi, np.pi)
+        c_vals = np.linspace(-3, 3, args.grid_size)
         
         # Grab current grid coordinates
         theta_curr = theta_vals[args.idx_j]

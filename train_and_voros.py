@@ -108,10 +108,18 @@ def compute_smoothed_fprs_tprs_jax(y_test, y_scores, thresholds):
     return fprs_smooth, tprs_smooth
 
 
-def jax_voros_loss(params, x_val, y_val, P, N):
-    """Negative VOROS loss that bypasses _kept_on_valid padding bugs."""
-    w_vec = params['w'].ravel()
-    logits = jnp.dot(x_val, w_vec) + params['b']
+def jax_voros_loss(params, x_val, y_val, P, N, M=1.0):
+    """JAX-tracable negative VOROS loss using fixed-shape pointwise masking."""
+    theta = params['theta']
+    c = params['c']
+    
+    # 1. Map parameters back to linear boundary weights
+    w1 = M * jnp.sin(theta)
+    w2 = -M * jnp.cos(theta)
+    b = M * c * jnp.cos(theta)
+    
+    w_vec = jnp.array([w1, w2])
+    logits = jnp.dot(x_val, w_vec) + b
     y_scores = jax.nn.sigmoid(logits.ravel())
     y_val_1d = y_val.ravel()
 
@@ -119,21 +127,29 @@ def jax_voros_loss(params, x_val, y_val, P, N):
     eps = 1e-5
     thresholds = jnp.linspace(eps, 1.0 - eps, 100)
     
-    # 1. Compute your smooth, unpadded curves
-    fprs_smooth, tprs_smooth = compute_smoothed_fprs_tprs_jax(y_val_1d, y_scores, thresholds)
+    # 2. Compute smooth ROC curve anchored at (0,0)
+    fprs_raw, tprs_raw = compute_smoothed_fprs_tprs_jax(y_val_1d, y_scores, thresholds)
+    fprs_smooth = fprs_raw.at[0].set(0.0)
+    tprs_smooth = tprs_raw.at[0].set(0.0)
     
-    # 2. Evaluate constraints explicitly using a float mask (1.0 if valid, 0.0 if invalid)
-    mask = jax.vmap(lambda f, t: _geometry_jax.keep_model(f, t, ALPHA, KAPPA, N, P))(fprs_smooth, tprs_smooth)
-    satisfy = jnp.any(mask)
+    # 3. Vectorized validity mask (returns 1.0 for valid points, 0.0 for invalid points)
+    # This preserves array shape (100,) so JAX can trace it without errors!
+    valid_mask = jax.vmap(
+        lambda f, t: jnp.where(_geometry_jax.keep_model(f, t, ALPHA, KAPPA, N, P), 1.0, 0.0)
+    )(fprs_smooth, tprs_smooth)
     
-    # 3. Compute VOROS directly over the uniform grid.
-    # We pass the unpadded curves straight to the integrator to avoid the tracer padding bug.
+    satisfy = jnp.any(valid_mask > 0.0)
+    
+    # 4. Zero out invalid curve points pointwise without changing array shape
+    acc_fprs = fprs_smooth * valid_mask
+    acc_tprs = tprs_smooth * valid_mask
+    
+    # 5. Compute VOROS over the masked fixed-size arrays
     voros_val = _geometry_jax.voros_jax(
-        fprs_smooth, tprs_smooth, KAPPA, ALPHA, P, N,
+        acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
         MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
     )
     
-    # Zero out the score if no points on the curve satisfy the constraints
     return -jnp.where(satisfy, voros_val, 0.0)
 
 # def jax_voros_loss(params, x_val, y_val, P, N):  # Remove thresholds from signature
