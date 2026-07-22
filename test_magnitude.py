@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 import _geometry_jax
 import grad
+from sklearn.metrics import roc_curve
 
 # Fixed pVOROS Parameters
 ALPHA = 0.6
@@ -87,7 +88,32 @@ def run_magnitude_experiment():
         # Evaluate soft pVOROS across the magnitude spectrum
         scores_vs_magnitude = []
         for M in magnitudes:
-            score = evaluate_soft_pvoros(X, Y, best_theta, best_c, M)
+
+            w1 = M * np.sin(best_theta)
+            w2 = -M * np.cos(best_c)
+            intercept = M * best_c * np.cos(best_theta)
+            
+            # Fast geometric evaluation using the reparameterized elements
+            logits = X[:, 0] * w1 + X[:, 1] * w2 + intercept
+            y_pred = 1.0 / (1.0 + np.exp(-logits))
+            
+            fprs, tprs, thrs = roc_curve(Y, y_pred)
+
+            P = int(np.sum(Y == 1))
+            N = int(np.sum(Y == 0))
+            kappa = KAPPA_FRAC * float(len(Y))
+            
+            _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(
+                fprs, tprs, thrs, ALPHA, kappa, N, P
+            )
+            
+            score = 0.0
+            if satisfy:
+                score = float(_geometry_jax.voros_jax(
+                    acc_fprs, acc_tprs, kappa, ALPHA, P, N,
+                    MIN_RATIO, MAX_RATIO, n_points=GRID_N_POINTS
+                ))
+            # score = evaluate_soft_pvoros(X, Y, best_theta, best_c, M)
             scores_vs_magnitude.append(score)
 
         # Plot magnitude curve on subplot
@@ -100,7 +126,7 @@ def run_magnitude_experiment():
         ax.set_xscale('log')
         ax.set_title(f'Seed: {seed.replace(".npy", "")}\n$(\\theta^*={np.degrees(best_theta):.1f}^\\circ, c^*={best_c:.2f})$', fontsize=11, fontweight='bold')
         ax.set_xlabel('Weight Magnitude $\|w\|$ (Log Scale)', fontsize=10)
-        ax.set_ylabel('Soft pVOROS Score', fontsize=10)
+        ax.set_ylabel('True pVOROS Score', fontsize=10)
         ax.axvline(1.0, color='red', linestyle='--', alpha=0.5)
         ax.grid(True, which="both", linestyle=":", alpha=0.5)
         ax.legend(loc='lower right', fontsize=9)
@@ -109,7 +135,7 @@ def run_magnitude_experiment():
     axs.flat[-1].set_visible(False)
     
     plt.tight_layout()
-    output_pdf = 'magnitude_impact_optimal_weights_grid.pdf'
+    output_pdf = 'magnitude_grid_true_pvoros.pdf'
     plt.savefig(output_pdf, format='pdf', dpi=300)
     print("\n" + "=" * 80)
     print(f"Saved 2x3 grid plot to: {output_pdf}")
