@@ -25,76 +25,7 @@ N_POINTS = 50
 SIGMOID_K = 50
 
 import _geometry_jax
-
-def sigmoid_jax(x, k=SIGMOID_K):
-    return jax.nn.sigmoid(k * x)
-
-def soft_set_sigmoid_jax(y_true_N, y_scores_N, tau, k):
-    y_true = jnp.asarray(y_true_N, dtype=jnp.float64)
-    y_scores = jnp.asarray(y_scores_N, dtype=jnp.float64)
-    soft_pred = sigmoid_jax(y_scores - tau, k)
-
-    pos_mask = y_true
-    neg_mask = 1.0 - y_true
-
-    tp = jnp.sum(soft_pred * pos_mask)
-    fn = jnp.sum((1.0 - soft_pred) * pos_mask)
-    fp = jnp.sum(soft_pred * neg_mask)
-    tn = jnp.sum((1.0 - soft_pred) * neg_mask)
-
-    return tp, fp, tn, fn
-
-def compute_smoothed_fprs_tprs_jax(y_test, y_scores, thresholds):
-    def one_threshold(tau):
-        tp, fp, tn, fn = soft_set_sigmoid_jax(y_test, y_scores, tau, SIGMOID_K)
-        tpr = tp / jnp.maximum(tp + fn, 1e-15)
-        fpr = fp / jnp.maximum(fp + tn, 1e-15)
-        return fpr, tpr
-
-    return jax.vmap(one_threshold)(thresholds)
-
-def jax_voros_loss(params, x_val, y_val, P, N, M=1.0):
-    """JAX-tracable negative VOROS loss using fixed-shape pointwise masking."""
-    theta = params['theta']
-    c = params['c']
-    
-    # 1. Map parameters back to linear boundary weights
-    w1 = M * jnp.sin(theta)
-    w2 = -M * jnp.cos(theta)
-    b = M * c * jnp.cos(theta)
-    
-    w_vec = jnp.array([w1, w2])
-    logits = jnp.dot(x_val, w_vec) + b
-    y_scores = jax.nn.sigmoid(logits.ravel())
-    y_val_1d = y_val.ravel()
-
-    KAPPA = KAPPA_FRAC * (P + N)
-    eps = 1e-5
-    thresholds = jnp.linspace(eps, 1.0 - eps, 100)
-    
-    # 2. Compute smooth ROC curve anchored at (0,0)
-    fprs_raw, tprs_raw = compute_smoothed_fprs_tprs_jax(y_val_1d, y_scores, thresholds)
-    fprs_smooth = fprs_raw.at[0].set(0.0)
-    tprs_smooth = tprs_raw.at[0].set(0.0)
-    
-    # 3. Vectorized validity mask
-    valid_mask = jax.vmap(
-        lambda f, t: jnp.where(_geometry_jax.keep_model(f, t, ALPHA, KAPPA, N, P), 1.0, 0.0)
-    )(fprs_smooth, tprs_smooth)
-    
-    satisfy = jnp.any(valid_mask > 0.0)
-    
-    # 4. Zero out invalid curve points pointwise
-    acc_fprs = fprs_smooth * valid_mask
-    acc_tprs = tprs_smooth * valid_mask
-    
-    # 5. Compute VOROS over the masked arrays
-    voros_val = _geometry_jax.voros_jax(
-        acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
-        MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
-    )
-    
-    return -jnp.where(satisfy, voros_val, 0.0)
+import grad
 
 def wrap_to_pi(theta):
     """Wraps any angle (in radians) strictly into [-pi, pi]."""
@@ -112,12 +43,15 @@ if __name__ == "__main__":
     train_test = data['train_test']
     
     # Loss gradient setup
-    loss_and_grad = jax.value_and_grad(jax_voros_loss)
+    loss_and_grad = jax.value_and_grad(grad.jax_voros_loss)
     
     # Global grid space [-pi, pi] x [-3.0, 3.0]
     theta_vals = np.linspace(-np.pi, np.pi, grid_size)
     c_vals = np.linspace(-3.0, 3.0, grid_size)
     extent = [np.degrees(theta_vals[0]), np.degrees(theta_vals[-1]), c_vals[0], c_vals[-1]]
+
+    # DICTIONARY TO STORE OPTIMAL PARAMETERS ACROSS SEEDS
+    optimal_params = {}
 
     # Iterate over all 5 seeds
     for seed in SEEDS:
@@ -177,6 +111,18 @@ if __name__ == "__main__":
 
         print(f"\nSEED {seed} BEST: Trial {best_trial_idx + 1} with Score {best_score:.6f}")
 
+        # --- SAVE OPTIMAL PARAMETERS FOR THIS SEED ---
+        best_data = all_trials_data[best_trial_idx]
+        optimal_theta = float(best_data['param_history'][-1, 0])
+        optimal_c = float(best_data['param_history'][-1, 1])
+
+        optimal_params[seed] = {
+            'theta': optimal_theta,
+            'c': optimal_c,
+            'best_score': best_score,
+            'trial_num': best_trial_idx + 1
+        }
+
         # --- LOAD PRE-CALCULATED HEATMAP DATA ---
         heatmap = np.zeros((grid_size, grid_size))
         for i in range(grid_size):
@@ -194,7 +140,7 @@ if __name__ == "__main__":
         cbar = plt.colorbar(im)
         cbar.set_label('Partial VOROS Score Metric', fontsize=11, labelpad=10)
 
-        # 1. Plot all OTHER trajectories as smaller/subtle white pathways
+        # 1. Plot all OTHER trajectories
         for idx, trial_data in enumerate(all_trials_data):
             if idx == best_trial_idx:
                 continue
@@ -207,11 +153,9 @@ if __name__ == "__main__":
             plt.plot(t_deg, c_track, color='white', linestyle='-', linewidth=0.8, alpha=0.35, zorder=2)
             plt.scatter(t_deg[0], c_track[0], color='white', edgecolor='none', s=15, alpha=0.4, zorder=2)
 
-        # Add dummy white line for legend representation
         plt.plot([], [], color='white', linestyle='-', linewidth=1.0, alpha=0.5, label='Other Init Paths')
 
-        # 2. Plot BEST trial trajectory distinctly
-        best_data = all_trials_data[best_trial_idx]
+        # 2. Plot BEST trial trajectory
         best_raw_thetas = best_data['param_history'][:, 0]
         best_norm_thetas = np.array([wrap_to_pi(t) for t in best_raw_thetas])
         best_thetas_deg = np.degrees(best_norm_thetas)
@@ -222,7 +166,6 @@ if __name__ == "__main__":
                    best_thetas_deg[1:] - best_thetas_deg[:-1], best_cs_tracked[1:] - best_cs_tracked[:-1], 
                    scale_units='xy', angles='xy', scale=1, color='red', width=0.0035, zorder=4, label='Best Gradient Steps')
         
-        # Reduced marker sizes (s=55 instead of 120)
         plt.scatter(best_thetas_deg[0], best_cs_tracked[0], color='#ff7f0e', edgecolor='black', s=55, zorder=5, label='Best Start')
         plt.scatter(best_thetas_deg[-1], best_cs_tracked[-1], color='#2ca02c', edgecolor='black', s=55, zorder=5, label='Best Convergence')
 
@@ -240,3 +183,12 @@ if __name__ == "__main__":
         plt.savefig(out_pdf, format='pdf', dpi=300)
         plt.close()
         print(f"Saved plot: {out_pdf}")
+
+    # --- SAVE ALL BEST OPTIMAL PARAMETERS TO AN OUTPUT FILE ---
+    save_filepath = 'best_optimal_params.npy'
+    np.save(save_filepath, optimal_params, allow_pickle=True)
+    print("\n" + "=" * 80)
+    print(f"SUCCESSFULLY SAVED BEST PARAMETERS TO: {save_filepath}")
+    print("=" * 80)
+    for seed, res in optimal_params.items():
+        print(f"{seed:<20} | Theta*: {np.degrees(res['theta']):6.2f}° | c*: {res['c']:7.4f} | Best Score: {res['best_score']:.6f}")
