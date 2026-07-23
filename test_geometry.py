@@ -943,6 +943,45 @@ class TestKeptOnValid(unittest.TestCase):
                                f"Masks differ for kappa={kappa}")
                 self.assertEqual(satisfy_np, satisfy_jax,
                                 f"Satisfy differs for kappa={kappa}")
+                
+    def _reference_mask(self, fprs, tprs, alpha, kappa, N_v, P_v):
+        """Ground truth: apply keep_model pointwise without vmap."""
+        return jnp.array(
+            [bool(_geometry_jax.keep_model(f, t, alpha, kappa, N_v, P_v)) for f, t in zip(fprs, tprs)]
+        )
+                
+    def test_mask_matches_reference(self, alpha, kappa, N_v, P_v):
+        fprs = jnp.linspace(0.0, 1.0, 11)
+        tprs = jnp.linspace(0.0, 1.0, 11)
+        thresholds = jnp.linspace(1.0, 0.0, 11)
+    
+        mask, _, _, _, satisfy = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N_v, P_v)
+    
+        expected_mask = self._reference_mask(fprs, tprs, alpha, kappa, N_v, P_v)
+        expected_satisfy = jnp.any(expected_mask)
+    
+        assert jnp.array_equal(mask, expected_mask), (
+            f"mask mismatch: got {mask}, expected {expected_mask}"
+        )
+        assert bool(satisfy) == bool(expected_satisfy), (
+            f"satisfy mismatch: got {satisfy}, expected {expected_satisfy}"
+        )
+ 
+ 
+    def test_mask_matches_reference_nontrivial_roc_curve(self):
+        # A more realistic, non-monotonic-looking ROC-ish curve
+        fprs = jnp.array([0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0])
+        tprs = jnp.array([0.0, 0.3, 0.5, 0.6, 0.65, 0.8, 1.0])
+        thresholds = jnp.linspace(1.0, 0.0, len(fprs))
+        alpha, kappa, N_v, P_v = 0.4, 0.5, 100.0, 20.0
+    
+        mask, _, _, _, satisfy = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N_v, P_v)
+    
+        expected_mask = self._reference_mask(fprs, tprs, alpha, kappa, N_v, P_v)
+        expected_satisfy = jnp.any(expected_mask)
+    
+        assert jnp.array_equal(mask, expected_mask)
+        assert bool(satisfy) == bool(expected_satisfy)
 
 if __name__ == '__main__':
     unittest.main()

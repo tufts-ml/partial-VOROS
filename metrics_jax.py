@@ -89,7 +89,7 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     
     return soft_fprs, soft_tprs
 
-def pvoros_loss(params, X, y_true, kappa, alpha, thresholds, temp=0.03):
+def pvoros_loss(params, X, y_true, kappa, alpha, thresholds, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.03):
     """Differentiable Partial VOROS loss function."""
     w, b = params
 
@@ -113,9 +113,9 @@ def pvoros_loss(params, X, y_true, kappa, alpha, thresholds, temp=0.03):
         α=alpha,
         P=P,
         N=N,
-        min_fp_cost_ratio=0.1,  
-        max_fp_cost_ratio=0.9,
-        n_points=200,           
+        min_fp_cost_ratio=min_fp_cost_ratio,  
+        max_fp_cost_ratio=max_fp_cost_ratio,
+        n_points=n_points,           
         thresholds=thresholds  # Must pass your defined array of thresholds here
     )
 
