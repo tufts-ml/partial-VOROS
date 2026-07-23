@@ -2,28 +2,25 @@
 Sanity-checks that jax_voros_loss agrees with pvoros_loss
 across multiple seed datasets and randomized parameter pairings.
 """
+import unittest
+
+import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
-import train_and_voros  # imported to safely monkeypatch module constants
-from train_and_voros import (  # noqa: adjust to real module
-    jax_voros_loss,
-    load_seed_data,
-    ALPHA,
-    KAPPA_FRAC,
-    MIN_FP_COST_RATIO,
-    MAX_FP_COST_RATIO,
-    N_POINTS,
-)
-
-from metrics_jax import pvoros_loss  # noqa: adjust to real module
-
+from metrics_jax import pv_loss_keep_model, pvoros_loss_kept_on_valid
 
 # Generate 10 reproducible random (theta, c) pairs
 rng = np.random.default_rng(seed=42)
+
+KAPPA_FRAC = 0.3
+ALPHA = 0.6
+MIN_FP_COST_RATIO = 1 / 9
+MAX_FP_COST_RATIO = 1 / 6
+N_POINTS = 1000
+
 THETA_C_PAIRS = [
-    (float(t), float(c)) 
+    (float(t), float(c))
     for t, c in zip(rng.uniform(0, 2 * np.pi, 10), rng.uniform(-1.0, 1.0, 10))
 ]
 
@@ -36,87 +33,133 @@ SEED_FILENAMES = [
 ]
 
 
-def _get_numeric_data(seed_filename):
-    """Loads seed data and ensures feature/label arrays are float/int numeric types
-    for JAX mathematical operations (prevents string abstract array errors)."""
-    x_val, y_val = load_seed_data(seed_filename)
-    x_val = jnp.asarray(x_val, dtype=jnp.float32)
-    y_val = jnp.asarray(y_val, dtype=jnp.float32)
-    return x_val, y_val
+def load_seed_data(seed_filename):
+    """Load data from a seed file."""
+    data_dict = np.load(seed_filename, allow_pickle=True).item()
+    x = data_dict["data"]["x"]
+    y = data_dict["data"]["y"]
+    return x, y
 
 
-@pytest.mark.parametrize("seed_filename", SEED_FILENAMES)
-@pytest.mark.parametrize("theta, c", THETA_C_PAIRS)
-def test_jax_loss_close_to_nonjax_voros(seed_filename, theta, c):
-    x_val, y_val = load_seed_data(seed_filename)
-    x_val = jnp.asarray(x_val, dtype=jnp.float32)
-    y_val = jnp.asarray(y_val, dtype=jnp.float32)
+def get_thresholds(y_pred):
+    """Compute thresholds for ROC curve based on unique predicted scores."""
+    eps = 1e-5
+    thresholds = np.unique(y_pred)[::-1]
+    thresholds = np.clip(thresholds, eps, 1.0 - eps)
+    return thresholds
 
-    # Convert angular (theta, c) parametrization to (w, b) expected by pvoros_loss
-    M = 1.0
+def _theta_c_to_wb_and_thresholds(w_vec, b_val, x_val):
+    logits = jnp.dot(x_val, w_vec) + b_val
+    y_pred = jax.nn.sigmoid(logits)
+    thresholds = get_thresholds(np.asarray(y_pred))
+    return thresholds
+
+
+def _theta_c_to_wb(theta, c, M=1.0):
+    """Convert angular (theta, c) parametrization to (w, b) expected by pvoros_loss."""
     w1 = M * jnp.sin(theta)
     w2 = -M * jnp.cos(theta)
     w_vec = jnp.array([w1, w2], dtype=jnp.float32)
     b_val = jnp.array(M * c * jnp.cos(theta), dtype=jnp.float32)
-
-    # Tuple expected by pvoros_loss: (w, b)
-    params_wb = (w_vec, b_val)
-
-    # Dict expected by jax_voros_loss: {"theta": ..., "c": ...}
-    params_dict = {
-        "theta": jnp.array(theta, dtype=jnp.float32),
-        "c": jnp.array(c, dtype=jnp.float32),
-    }
-
-    P = float(jnp.sum(y_val == 1.0))
-    N = float(jnp.sum(y_val == 0.0))
-    KAPPA = KAPPA_FRAC * (P + N)
-
-    eps = 1e-5
-    thresholds = jnp.linspace(eps, 1.0 - eps, 100)
-
-    old_loss_val = float(
-        pvoros_loss(
-            params=params_wb,
-            X=x_val,
-            y_true=y_val,
-            kappa=KAPPA,
-            alpha=ALPHA,
-            thresholds=thresholds,
-            min_fp_cost_ratio=MIN_FP_COST_RATIO,
-            max_fp_cost_ratio=MAX_FP_COST_RATIO,
-            n_points=N_POINTS,
-        )
-    )
-
-    new_loss_val = float(jax_voros_loss(params_dict, x_val, y_val, P, N))
-
-    assert new_loss_val == pytest.approx(old_loss_val, abs=0.05), (
-        f"seed={seed_filename}, theta={theta:.4f}, c={c:.4f}: "
-        f"jax_loss={new_loss_val:.4f} vs pvoros_loss={old_loss_val:.4f} "
-        f"(diff={abs(new_loss_val - old_loss_val):.4f})"
-    )
+    return w_vec, b_val
 
 
-@pytest.mark.parametrize("seed_filename", SEED_FILENAMES)
-@pytest.mark.parametrize("theta, c", THETA_C_PAIRS)
-def test_jax_loss_is_zero_when_no_point_satisfies_constraints(seed_filename, theta, c, monkeypatch):
-    """If constraints are impossible to satisfy, both paths should treat
-    the loss/VOROS as 0 (jax via the `satisfy` gate, non-jax via an
-    all-empty/degenerate max_points curve)."""
-    x_val, y_val = _get_numeric_data(seed_filename)
-    params = {"theta": jnp.array(theta, dtype=jnp.float32), "c": jnp.array(c, dtype=jnp.float32)}
-    P = float(jnp.sum(y_val == 1))
-    N = float(jnp.sum(y_val == 0))
+class TestJaxLossVsNonJaxVoros(unittest.TestCase):
 
-    # Safely override ALPHA and KAPPA_FRAC for this test execution only
-    monkeypatch.setattr(train_and_voros, "ALPHA", 0.9999)
-    monkeypatch.setattr(train_and_voros, "KAPPA_FRAC", -1.0)
+    def setUp(self):
+        # Cache loaded seed data across subTests within a single test method
+        # so we don't reload the same .npy file 10x per seed.
+        self._data_cache = {}
 
-    loss = jax_voros_loss(params, x_val, y_val, P, N)
+    def _get_data(self, seed_filename):
+        if seed_filename not in self._data_cache:
+            x_val, y_val = load_seed_data(seed_filename)
+            x_val = jnp.asarray(x_val, dtype=jnp.float32)
+            y_val = jnp.asarray(y_val, dtype=jnp.float32)
+            self._data_cache[seed_filename] = (x_val, y_val)
+        return self._data_cache[seed_filename]
 
-    assert float(loss) == pytest.approx(0.0, abs=1e-9)
+    def test_jax_loss_close_to_nonjax_voros(self):
+        for seed_filename in SEED_FILENAMES:
+            x_val, y_val = self._get_data(seed_filename)
+
+            for theta, c in THETA_C_PAIRS:
+                with self.subTest(seed_filename=seed_filename, theta=theta, c=c):
+                    w_vec, b_val = _theta_c_to_wb(theta, c)
+                    params_wb = (w_vec, b_val)
+
+                    P = float(jnp.sum(y_val == 1.0))
+                    N = float(jnp.sum(y_val == 0.0))
+                    KAPPA = KAPPA_FRAC * (P + N)
+
+                    thresholds = _theta_c_to_wb_and_thresholds(w_vec, b_val, x_val)
+
+                    old_loss_val = float(
+                        pvoros_loss_kept_on_valid(
+                            params=params_wb,
+                            X=x_val,
+                            y_true=y_val,
+                            kappa=KAPPA,
+                            alpha=ALPHA,
+                            thresholds=thresholds,
+                            min_fp_cost_ratio=MIN_FP_COST_RATIO,
+                            max_fp_cost_ratio=MAX_FP_COST_RATIO,
+                            n_points=N_POINTS,
+                        )
+                    )
+
+                    new_loss_val = float(
+                        pv_loss_keep_model(
+                            params_wb, x_val, y_val, P, N, KAPPA, ALPHA, thresholds,
+                            MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
+                        )
+                    )
+
+                    print(
+                        f"seed={seed_filename}, theta={theta:.4f}, c={c:.4f}: "
+                        f"old_loss_val={old_loss_val:.4f}, new_loss_val={new_loss_val:.4f}"
+                    )
+
+                    diff = abs(new_loss_val - old_loss_val)
+                    self.assertLessEqual(
+                        diff,
+                        0.05,
+                        msg=(
+                            f"seed={seed_filename}, theta={theta:.4f}, c={c:.4f}: "
+                            f"jax_loss={new_loss_val:.4f} vs pvoros_loss={old_loss_val:.4f} "
+                            f"(diff={diff:.4f})"
+                        ),
+                    )
+
+    def test_jax_loss_is_zero_when_no_point_satisfies_constraints(self):
+        """If constraints are impossible to satisfy, both paths should treat
+        the loss/VOROS as 0 (jax via the `satisfy` gate, non-jax via an
+        all-empty/degenerate max_points curve)."""
+        for seed_filename in SEED_FILENAMES:
+            x_val, y_val = self._get_data(seed_filename)
+
+            for theta, c in THETA_C_PAIRS:
+                with self.subTest(seed_filename=seed_filename, theta=theta, c=c):
+                    w_vec, b_val = _theta_c_to_wb(theta, c)
+                    params_wb = (w_vec, b_val)
+
+                    P = float(jnp.sum(y_val == 1))
+                    N = float(jnp.sum(y_val == 0))
+
+                    thresholds = _theta_c_to_wb_and_thresholds(w_vec, b_val, x_val)
+
+                    # Impossible alpha/kappa combo -> nothing should satisfy
+                    impossible_alpha = 0.9999
+                    impossible_kappa = -1.0
+
+                    loss = float(
+                        pv_loss_keep_model(
+                            params_wb, x_val, y_val, P, N, impossible_kappa, impossible_alpha,
+                            thresholds, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
+                        )
+                    )
+                    self.assertAlmostEqual(loss, 0.0, places=9)
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    unittest.main(verbosity=2)

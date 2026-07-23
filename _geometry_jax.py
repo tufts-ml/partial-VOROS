@@ -1,8 +1,6 @@
 import jax
 import jax.numpy as jnp
-from functools import partial
 import numpy as np
-import scipy.integrate
 from typing import Optional
 
 from jax import config

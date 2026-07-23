@@ -1,7 +1,6 @@
 import numpy as np
 from sklearn.metrics import roc_curve
 import _geometry_jax
-import _geometry
 import jax.numpy as jnp
 import jax
 
@@ -89,7 +88,17 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     
     return soft_fprs, soft_tprs
 
-def pvoros_loss(params, X, y_true, kappa, alpha, thresholds, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.03):
+def pvoros_loss_kept_on_valid(
+    params, 
+    X, 
+    y_true, 
+    kappa, 
+    alpha, 
+    thresholds, 
+    min_fp_cost_ratio, 
+    max_fp_cost_ratio, 
+    n_points=1000, 
+    temp=0.03):
     """Differentiable Partial VOROS loss function."""
     w, b = params
 
@@ -121,5 +130,49 @@ def pvoros_loss(params, X, y_true, kappa, alpha, thresholds, min_fp_cost_ratio, 
 
     return -vor
 
-
-
+def pv_loss_keep_model(
+    params, 
+    X, 
+    y_true, 
+    P, 
+    N,
+    kappa, 
+    alpha,
+    thresholds,
+    min_fp_cost_ratio, 
+    max_fp_cost_ratio, 
+    n_points=1000, 
+    temp=0.03,
+    M=1.0):
+    """JAX-tracable negative VOROS loss using fixed-shape pointwise masking."""
+    w, b = params
+    
+    # 1. Map parameters back to linear boundary weights
+    
+    logits = jnp.dot(X, w) + b
+    y_pred = jax.nn.sigmoid(logits)
+    
+    # 2. Compute smooth ROC curve anchored at (0,0)
+    fprs_raw, tprs_raw = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    fprs_smooth = fprs_raw.at[0].set(0.0)
+    tprs_smooth = tprs_raw.at[0].set(0.0)
+    
+    # 3. Vectorized validity mask (returns 1.0 for valid points, 0.0 for invalid points)
+    # This preserves array shape (100,) so JAX can trace it without errors!
+    valid_mask = jax.vmap(
+        lambda f, t: jnp.where(_geometry_jax.keep_model(f, t, alpha, kappa, N, P), 1.0, 0.0)
+    )(fprs_smooth, tprs_smooth)
+    
+    satisfy = jnp.any(valid_mask > 0.0)
+    
+    # 4. Zero out invalid curve points pointwise without changing array shape
+    acc_fprs = fprs_smooth * valid_mask
+    acc_tprs = tprs_smooth * valid_mask
+    
+    # 5. Compute VOROS over the masked fixed-size arrays
+    voros_val = _geometry_jax.voros_jax(
+        acc_fprs, acc_tprs, kappa, alpha, P, N,
+        min_fp_cost_ratio, max_fp_cost_ratio, n_points
+    )
+    
+    return -jnp.where(satisfy, voros_val, 0.0)
