@@ -27,10 +27,6 @@ SIGMOID_K = 50
 import _geometry_jax
 import grad
 
-def wrap_to_pi(theta):
-    """Wraps any angle (in radians) strictly into [-pi, pi]."""
-    return (theta + np.pi) % (2 * np.pi) - np.pi
-
 if __name__ == "__main__":
     NUM_TRIALS = 10
     MAX_STEPS = 100
@@ -42,7 +38,7 @@ if __name__ == "__main__":
     data = np.load('heatmaps/sweep_meta_data.npy', allow_pickle=True).item()
     train_test = data['train_test']
     
-    # Loss gradient setup
+    # Loss gradient setup using grad.py
     loss_and_grad = jax.value_and_grad(grad.jax_voros_loss)
     
     # Global grid space [-pi, pi] x [-3.0, 3.0]
@@ -146,7 +142,7 @@ if __name__ == "__main__":
                 continue
             
             t_raw = trial_data['param_history'][:, 0]
-            t_norm = np.array([wrap_to_pi(t) for t in t_raw])
+            t_norm = np.array([grad.wrap_to_pi(t) for t in t_raw])
             t_deg = np.degrees(t_norm)
             c_track = trial_data['param_history'][:, 1]
 
@@ -157,7 +153,7 @@ if __name__ == "__main__":
 
         # 2. Plot BEST trial trajectory
         best_raw_thetas = best_data['param_history'][:, 0]
-        best_norm_thetas = np.array([wrap_to_pi(t) for t in best_raw_thetas])
+        best_norm_thetas = np.array([grad.wrap_to_pi(t) for t in best_raw_thetas])
         best_thetas_deg = np.degrees(best_norm_thetas)
         best_cs_tracked = best_data['param_history'][:, 1]
 
