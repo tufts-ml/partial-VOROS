@@ -108,92 +108,92 @@ def compute_smoothed_fprs_tprs_jax(y_test, y_scores, thresholds):
     return fprs_smooth, tprs_smooth
 
 
-def jax_voros_loss(params, x_val, y_val, P, N, M=1.0):
-    """JAX-tracable negative VOROS loss using fixed-shape pointwise masking."""
-    theta = params['theta']
-    c = params['c']
+# def jax_voros_loss(params, x_val, y_val, P, N, M=1.0):
+#     """JAX-tracable negative VOROS loss using fixed-shape pointwise masking."""
+#     theta = params['theta']
+#     c = params['c']
     
-    # 1. Map parameters back to linear boundary weights
-    w1 = M * jnp.sin(theta)
-    w2 = -M * jnp.cos(theta)
-    b = M * c * jnp.cos(theta)
+#     # 1. Map parameters back to linear boundary weights
+#     w1 = M * jnp.sin(theta)
+#     w2 = -M * jnp.cos(theta)
+#     b = M * c * jnp.cos(theta)
     
-    w_vec = jnp.array([w1, w2])
-    logits = jnp.dot(x_val, w_vec) + b
-    y_scores = jax.nn.sigmoid(logits.ravel())
-    y_val_1d = y_val.ravel()
-
-    KAPPA = KAPPA_FRAC * (P + N)
-    eps = 1e-5
-    thresholds = jnp.linspace(eps, 1.0 - eps, 100)
-    
-    # 2. Compute smooth ROC curve anchored at (0,0)
-    fprs_raw, tprs_raw = compute_smoothed_fprs_tprs_jax(y_val_1d, y_scores, thresholds)
-    fprs_smooth = fprs_raw.at[0].set(0.0)
-    tprs_smooth = tprs_raw.at[0].set(0.0)
-    
-    # 3. Vectorized validity mask (returns 1.0 for valid points, 0.0 for invalid points)
-    # This preserves array shape (100,) so JAX can trace it without errors!
-    valid_mask = jax.vmap(
-        lambda f, t: jnp.where(_geometry_jax.keep_model(f, t, ALPHA, KAPPA, N, P), 1.0, 0.0)
-    )(fprs_smooth, tprs_smooth)
-    
-    satisfy = jnp.any(valid_mask > 0.0)
-    
-    # 4. Zero out invalid curve points pointwise without changing array shape
-    acc_fprs = fprs_smooth * valid_mask
-    acc_tprs = tprs_smooth * valid_mask
-    
-    # 5. Compute VOROS over the masked fixed-size arrays
-    voros_val = _geometry_jax.voros_jax(
-        acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
-        MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
-    )
-    
-    return -jnp.where(satisfy, voros_val, 0.0)
-
-# def jax_voros_loss(params, x_val, y_val, P, N):  # Remove thresholds from signature
-#     """Negative VOROS loss with explicit 1D dimension safety parsing."""
-#     # Ensure params weights are treated cleanly as a 1D vector
-#     w_vec = params['w'].ravel()
-    
-#     # Compute activations and flatten them explicitly to shape (N_SAMPLES,)
-#     logits = jnp.dot(x_val, w_vec) + params['b']
-#     logits = logits.ravel()
-    
-#     y_scores = jax.nn.sigmoid(logits)
-    
-#     # Explicitly force your binary target masks to match the exact same 1D structure
+#     w_vec = jnp.array([w1, w2])
+#     logits = jnp.dot(x_val, w_vec) + b
+#     y_scores = jax.nn.sigmoid(logits.ravel())
 #     y_val_1d = y_val.ravel()
 
 #     KAPPA = KAPPA_FRAC * (P + N)
 #     eps = 1e-5
 #     thresholds = jnp.linspace(eps, 1.0 - eps, 100)
     
-#     # 1. Compute raw smooth arrays via vmap
+#     # 2. Compute smooth ROC curve anchored at (0,0)
 #     fprs_raw, tprs_raw = compute_smoothed_fprs_tprs_jax(y_val_1d, y_scores, thresholds)
-    
-#     # 2. FORCE the first entry to be exactly (0.0, 0.0) to match the NumPy loop range(1, len)
 #     fprs_smooth = fprs_raw.at[0].set(0.0)
 #     tprs_smooth = tprs_raw.at[0].set(0.0)
     
-#     # Filter points
-#     _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(
-#         fprs_smooth, tprs_smooth, thresholds, ALPHA, KAPPA, N, P
-#     )
+#     # 3. Vectorized validity mask (returns 1.0 for valid points, 0.0 for invalid points)
+#     # This preserves array shape (100,) so JAX can trace it without errors!
+#     valid_mask = jax.vmap(
+#         lambda f, t: jnp.where(_geometry_jax.keep_model(f, t, ALPHA, KAPPA, N, P), 1.0, 0.0)
+#     )(fprs_smooth, tprs_smooth)
     
-#     # Calculate raw VOROS area
+#     satisfy = jnp.any(valid_mask > 0.0)
+    
+#     # 4. Zero out invalid curve points pointwise without changing array shape
+#     acc_fprs = fprs_smooth * valid_mask
+#     acc_tprs = tprs_smooth * valid_mask
+    
+#     # 5. Compute VOROS over the masked fixed-size arrays
 #     voros_val = _geometry_jax.voros_jax(
 #         acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
 #         MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
 #     )
     
-#     total_envelope_area, _ = _geometry_jax.total_region_area(P, N, ALPHA, KAPPA)
-#     safe_voros = jnp.minimum(voros_val, total_envelope_area)
+#     return -jnp.where(satisfy, voros_val, 0.0)
+
+def jax_voros_loss(params, x_val, y_val, P, N):  # Remove thresholds from signature
+    """Negative VOROS loss with explicit 1D dimension safety parsing."""
+    # Ensure params weights are treated cleanly as a 1D vector
+    w_vec = params['w'].ravel()
     
-#     final_voros = jnp.where(satisfy, safe_voros, 0.0)
+    # Compute activations and flatten them explicitly to shape (N_SAMPLES,)
+    logits = jnp.dot(x_val, w_vec) + params['b']
+    logits = logits.ravel()
     
-#     return -final_voros
+    y_scores = jax.nn.sigmoid(logits)
+    
+    # Explicitly force your binary target masks to match the exact same 1D structure
+    y_val_1d = y_val.ravel()
+
+    KAPPA = KAPPA_FRAC * (P + N)
+    eps = 1e-5
+    thresholds = jnp.linspace(eps, 1.0 - eps, 100)
+    
+    # 1. Compute raw smooth arrays via vmap
+    fprs_raw, tprs_raw = compute_smoothed_fprs_tprs_jax(y_val_1d, y_scores, thresholds)
+    
+    # 2. FORCE the first entry to be exactly (0.0, 0.0) to match the NumPy loop range(1, len)
+    fprs_smooth = fprs_raw.at[0].set(0.0)
+    tprs_smooth = tprs_raw.at[0].set(0.0)
+    
+    # Filter points
+    _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(
+        fprs_smooth, tprs_smooth, thresholds, ALPHA, KAPPA, N, P
+    )
+    
+    # Calculate raw VOROS area
+    voros_val = _geometry_jax.voros_jax(
+        acc_fprs, acc_tprs, KAPPA, ALPHA, P, N,
+        MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, n_points=N_POINTS
+    )
+    
+    total_envelope_area, _ = _geometry_jax.total_region_area(P, N, ALPHA, KAPPA)
+    safe_voros = jnp.minimum(voros_val, total_envelope_area)
+    
+    final_voros = jnp.where(satisfy, safe_voros, 0.0)
+    
+    return -final_voros
 
 
 def train_jax_voros_logistic(seed_filename, learning_rate=0.01, n_steps=100, n_thresholds=100, test_split=0.3):
