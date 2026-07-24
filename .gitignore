@@ -183,3 +183,6 @@ voros_results.npy
 debugging_training.py
 
 heatmaps/logs
+
+busi_data
+cache
