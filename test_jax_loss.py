@@ -13,7 +13,7 @@ from metrics_jax import pv_loss_keep_model, pvoros_loss_kept_on_valid
 # Generate 10 reproducible random (theta, c) pairs
 rng = np.random.default_rng(seed=42)
 
-KAPPA_FRAC = 0.3
+KAPPA_FRAC = 0.5
 ALPHA = 0.6
 MIN_FP_COST_RATIO = 1 / 9
 MAX_FP_COST_RATIO = 1 / 6
@@ -94,19 +94,18 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
 
                     thresholds = _theta_c_to_wb_and_thresholds(w_vec, b_val, x_val)
 
-                    old_loss_val = float(
-                        pvoros_loss_kept_on_valid(
-                            params=params_wb,
-                            X=x_val,
-                            y_true=y_val,
-                            kappa=KAPPA,
-                            alpha=ALPHA,
-                            thresholds=thresholds,
-                            min_fp_cost_ratio=MIN_FP_COST_RATIO,
-                            max_fp_cost_ratio=MAX_FP_COST_RATIO,
-                            n_points=N_POINTS,
-                        )
-                    )
+                    loss, satisfy = pvoros_loss_kept_on_valid(
+                                                params=params_wb,
+                                                X=x_val,
+                                                y_true=y_val,
+                                                kappa=KAPPA,
+                                                alpha=ALPHA,
+                                                thresholds=thresholds,
+                                                min_fp_cost_ratio=MIN_FP_COST_RATIO,
+                                                max_fp_cost_ratio=MAX_FP_COST_RATIO,
+                                                n_points=N_POINTS,
+                                            )
+                    old_loss_val = float(loss)
 
                     new_loss_val = float(
                         pv_loss_keep_model(
@@ -117,19 +116,22 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
 
                     print(
                         f"seed={seed_filename}, theta={theta:.4f}, c={c:.4f}: "
-                        f"old_loss_val={old_loss_val:.4f}, new_loss_val={new_loss_val:.4f}"
+                        f"old_loss_val={old_loss_val:.7f}, new_loss_val={new_loss_val:.7f}, satisfy={satisfy}"
                     )
 
                     diff = abs(new_loss_val - old_loss_val)
-                    self.assertLessEqual(
-                        diff,
-                        0.05,
-                        msg=(
-                            f"seed={seed_filename}, theta={theta:.4f}, c={c:.4f}: "
-                            f"jax_loss={new_loss_val:.4f} vs pvoros_loss={old_loss_val:.4f} "
-                            f"(diff={diff:.4f})"
-                        ),
-                    )
+                    if satisfy:
+                        self.assertLessEqual(
+                            diff,
+                            1e-7,
+                            msg=(
+                                f"seed={seed_filename}, theta={theta:.4f}, c={c:.4f}: "
+                                f"jax_loss={new_loss_val:.7f} vs pvoros_loss={old_loss_val:.7f} "
+                                f"(diff={diff:.7f})"
+                            ),
+                        )
+                    else:
+                        self.assertEqual(new_loss_val, 0.0)
 
     def test_jax_loss_is_zero_when_no_point_satisfies_constraints(self):
         """If constraints are impossible to satisfy, both paths should treat
