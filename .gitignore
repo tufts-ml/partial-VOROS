@@ -186,3 +186,5 @@ heatmaps/logs
 
 busi_data
 cache
+
+*.zip

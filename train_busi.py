@@ -1,5 +1,8 @@
 import numpy as np
 import torch
+print("CUDA Available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("Device Name:", torch.cuda.get_device_name(0))
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
@@ -7,8 +10,10 @@ from torchvision.models import vit_b_16, ViT_B_16_Weights
 from PIL import Image
 
 import jax
+print("JAX Devices:", jax.devices())
+print("JAX Default Backend:", jax.default_backend())
 import jax.numpy as jnp
-import optax
+import optaxgit rm --cached busi_data.zip
 
 from metrics_jax import pv_loss
 from pathlib import Path
@@ -19,7 +24,7 @@ from pathlib import Path
 DATA_DIR = Path("busi_data")       # expects DATA_DIR/{benign,malignant,normal}/*.png
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
-BATCH_SIZE = 32
+BATCH_SIZE = 256
 DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
 VAL_FRACTION = 0.2
 SPLIT_SEED = 0
@@ -69,12 +74,12 @@ def make_transform():
 # ---------------------------------------------------------------------------
 def build_encoder():
     weights = ViT_B_16_Weights.IMAGENET1K_V1
-    model = vit_b_16(weights=weights)
-    model.heads = nn.Identity()   # Drop classification head, keep 768-d CLS embedding
+    model = vit_b_16(weights=weights).to("cuda") # Load directly to CUDA
+    model.heads = nn.Identity()
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
-    return model.to(DEVICE)
+    return model
 
 
 @torch.no_grad()
