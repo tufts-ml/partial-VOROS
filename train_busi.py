@@ -13,7 +13,7 @@ import jax
 print("JAX Devices:", jax.devices())
 print("JAX Default Backend:", jax.default_backend())
 import jax.numpy as jnp
-import optaxgit rm --cached busi_data.zip
+import optax
 
 from metrics_jax import pv_loss
 from pathlib import Path
@@ -149,14 +149,11 @@ def get_prediction_thresholds(y_pred, num_thresholds=100):
     return jax.lax.stop_gradient(thresholds)
 
 
-def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0):
-    key = jax.random.PRNGKey(seed)
+def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=10):
     x = jnp.asarray(feats, dtype=jnp.float32)
     y = jnp.asarray(labels, dtype=jnp.float32)
 
-    params = init_params(key, x.shape[1])
     optimizer = optax.adam(lr)
-    opt_state = optimizer.init(params)
 
     P = jnp.sum(y == 1.0)
     N = jnp.sum(y == 0.0)
@@ -170,10 +167,7 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0):
     def loss_fn(p):
         logits = x @ p["w"] + p["b"]
         y_pred = jax.nn.sigmoid(logits)
-
-        # Dynamic thresholds calculated directly from model output
         thresholds = get_prediction_thresholds(y_pred)
-
         return pv_loss(
             p, x, y, P, N, kappa, alpha, thresholds,
             min_fp_cost_ratio, max_fp_cost_ratio, n_points, temp
@@ -185,12 +179,32 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0):
         params = optax.apply_updates(params, updates)
         return params, opt_state, loss
 
-    for epoch in range(epochs):
-        params, opt_state, loss = train_step(params, opt_state)
-        if epoch % 25 == 0 or epoch == epochs - 1:
-            print(f"epoch {epoch:4d}  pvoros_loss {float(loss):.4f}")
+    def run_single(run_seed):
+        key = jax.random.PRNGKey(run_seed)
+        params = init_params(key, x.shape[1])
+        opt_state = optimizer.init(params)
 
-    return params
+        for epoch in range(epochs):
+            params, opt_state, loss = train_step(params, opt_state)
+            if epoch % 25 == 0 or epoch == epochs - 1:
+                print(f"[seed {run_seed}] epoch {epoch:4d}  pvoros_loss {float(loss):.4f}")
+
+        return params, float(loss)
+
+    best_params = None
+    best_loss = float("inf")
+
+    for i in range(n_restarts):
+        run_seed = seed + i
+        params, final_loss = run_single(run_seed)
+        print(f"[seed {run_seed}] final loss: {final_loss:.4f}")
+
+        if final_loss < best_loss:
+            best_loss = final_loss
+            best_params = params
+
+    print(f"\nbest final loss: {best_loss:.4f}")
+    return best_params
 
 
 # ---------------------------------------------------------------------------
