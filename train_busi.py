@@ -1,37 +1,3 @@
-"""
-Ultrasound classifier: frozen ViT encoder -> logistic regression -> Partial VOROS objective.
-
-Pipeline
---------
-1. (PyTorch) Load a pretrained torchvision ViT-B/16, strip its classification head,
-   and use it as a frozen feature encoder. Images are resized to 224x224 and
-   replicated to 3 channels (ViT expects RGB, ultrasound images are grayscale).
-2. Run every image through the encoder ONCE to get a 768-d embedding, and cache
-   embeddings + labels to disk. No need to keep the ViT in the loop after this,
-   since it's frozen -> this makes the actual training step trivial.
-3. Split the cached embeddings into train/val with a stratified split (data
-   is not pre-split on disk -- it's just DATA_DIR/{benign,malignant,normal}/*).
-4. (JAX) Train a single linear layer (logistic regression) on the train split,
-   with Partial VOROS as the loss via jax.grad.
-
-Classes are collapsed to binary per your spec: malignant = positive (1),
-benign + normal = negative (0).
-
-Plug in your own partial-VOROS package
----------------------------------------
-This script imports `partial_voros` and calls `partial_voros_loss(...)` inside
-`pvoros_loss_fn`. That name/signature is a guess at your packaged API -- swap
-in whatever you actually exposed (e.g. `from partial_voros.metric import ...`).
-If the import fails, the script falls back to a small self-contained
-differentiable Partial VOROS implemented the same way you described in your
-own work: sigmoid-relaxed soft ROC points + shoelace-formula area, restricted
-to a cost-ratio interval [c_lo, c_hi]. That fallback is here so the script is
-runnable end-to-end even before you wire in the real library -- swap it out.
-"""
-
-import os
-from pathlib import Path
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -44,10 +10,13 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from metrics_jax import pv_loss
+from pathlib import Path
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-DATA_DIR = Path("busi_data")       # expects DATA_DIR/{benign,malignant,normal}/*.png -- not pre-split
+DATA_DIR = Path("busi_data")       # expects DATA_DIR/{benign,malignant,normal}/*.png
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
 BATCH_SIZE = 32
@@ -55,17 +24,12 @@ DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.i
 VAL_FRACTION = 0.2
 SPLIT_SEED = 0
 
-# Partial VOROS cost-ratio interval to integrate over. Narrow this to the
-# region of the cost space that's clinically relevant (e.g. cases where
-# missing a malignancy is weighted much more heavily than a false alarm).
-C_LO, C_HI = 0.1, 0.9
-
 LR = 1e-2
 EPOCHS = 300
 
 
 # ---------------------------------------------------------------------------
-# 1. Dataset — binary labels, benign+normal -> 0, malignant -> 1
+# 1. Dataset & Preprocessing (Crop, Resize, 3-Class -> Binary Mapping)
 # ---------------------------------------------------------------------------
 LABEL_MAP = {"benign": 0, "normal": 0, "malignant": 1}
 
@@ -83,24 +47,30 @@ class UltrasoundDataset(Dataset):
         return len(self.paths)
 
     def __getitem__(self, idx):
-        img = Image.open(self.paths[idx]).convert("L").convert("RGB")  # gray -> 3ch
+        img = Image.open(self.paths[idx]).convert("L").convert("RGB")
         return self.transform(img), self.labels[idx]
 
 
 def make_transform():
-    weights = ViT_B_16_Weights.IMAGENET1K_V1
-    # Use the exact preprocessing the pretrained ViT was trained with
-    # (resize to 224, ImageNet normalization) rather than hand-rolling it.
-    return weights.transforms()
+    # Standard ViT preprocessing with central crop and 224x224 resize
+    return transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        ),
+    ])
 
 
 # ---------------------------------------------------------------------------
-# 2. Frozen ViT encoder -> cache embeddings
+# 2. Frozen ViT Encoder & Embedding Cache
 # ---------------------------------------------------------------------------
 def build_encoder():
     weights = ViT_B_16_Weights.IMAGENET1K_V1
     model = vit_b_16(weights=weights)
-    model.heads = nn.Identity()   # drop classification head, keep 768-d CLS embedding
+    model.heads = nn.Identity()   # Drop classification head, keep 768-d CLS embedding
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
@@ -112,138 +82,66 @@ def extract_embeddings(model, loader):
     feats, labels = [], []
     for x, y in loader:
         x = x.to(DEVICE)
-        emb = model(x)                       # (B, 768)
+        emb = model(x)
         feats.append(emb.cpu().numpy())
         labels.append(np.asarray(y))
     return np.concatenate(feats), np.concatenate(labels)
 
 
 def get_or_build_embeddings(root: Path):
-    """
-    Encode the FULL dataset once (data isn't pre-split into train/val), cache
-    it, and return everything. Splitting happens afterward in memory via
-    `split_train_val`, so the ViT never needs to run twice.
-    """
     feat_path = CACHE_DIR / "all_feats.npy"
     label_path = CACHE_DIR / "all_labels.npy"
     if feat_path.exists() and label_path.exists():
-        return np.load(feat_path), np.load(label_path)
+        print("DEBUG: Loading embeddings from cache.")
+        feats = np.load(feat_path)
+        labels = np.load(label_path)
+        print(f"DEBUG: Cached all_feats.shape = {feats.shape}, all_labels.shape = {labels.shape}")
+        print(f"DEBUG: Cached all_labels min = {labels.min()}, max = {labels.max()}, mean = {labels.mean():.6f}")
+        return feats, labels
 
     transform = make_transform()
     ds = UltrasoundDataset(root, transform)
     if len(ds) == 0:
-        raise RuntimeError(
-            f"Found 0 images under {root}. Expected subfolders "
-            f"{list(LABEL_MAP.keys())} directly under it, e.g. {root}/benign/*.png. "
-            f"Check DATA_DIR and folder names."
-        )
-    loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+        raise RuntimeError(f"Found 0 images under {root}.")
+
+    loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
     encoder = build_encoder()
     feats, labels = extract_embeddings(encoder, loader)
     np.save(feat_path, feats)
     np.save(label_path, labels)
+    print(f"DEBUG: Generated all_feats.shape = {feats.shape}, all_labels.shape = {labels.shape}")
+    print(f"DEBUG: Generated all_labels min = {labels.min()}, max = {labels.max()}, mean = {labels.mean():.6f}")
     return feats, labels
 
 
 def split_train_val(feats, labels, val_fraction=VAL_FRACTION, seed=SPLIT_SEED):
-    """Stratified train/val split so both splits keep the same malignant rate."""
     from sklearn.model_selection import train_test_split
-
-    train_feats, val_feats, train_labels, val_labels = train_test_split(
+    return train_test_split(
         feats, labels,
         test_size=val_fraction,
         stratify=labels,
         random_state=seed,
     )
-    return train_feats, train_labels, val_feats, val_labels
 
 
 # ---------------------------------------------------------------------------
-# 3. Partial VOROS loss (JAX) — swap in your real package here
-# ---------------------------------------------------------------------------
-try:
-    import metrics_jax  # noqa: F401  -- your pip-editable package
-
-    def pvoros_loss_fn(scores, labels, c_lo=C_LO, c_hi=C_HI):
-        """Adjust this call to match your actual packaged API."""
-        return metrics_jax.pvoros_loss(scores, labels, c_lo=c_lo, c_hi=c_hi)
-
-    print("Using metrics_jax package for the training objective.")
-
-except ImportError:
-    print("`metrics_jax` not importable — using in-file differentiable fallback. "
-          "Swap `pvoros_loss_fn` for your real package once it's on the path.")
-
-    def _soft_roc_points(scores, labels, taus, sharpness=50.0):
-        """Sigmoid-relaxed TPR/FPR at each threshold in `taus`."""
-        pos_mask = labels == 1
-        neg_mask = labels == 0
-        n_pos = jnp.sum(pos_mask)
-        n_neg = jnp.sum(neg_mask)
-
-        # soft "predicted positive" indicator per threshold: sigmoid(k*(score - tau))
-        pred_pos = jax.nn.sigmoid(sharpness * (scores[None, :] - taus[:, None]))  # (T, N)
-
-        tpr = jnp.sum(pred_pos * pos_mask[None, :], axis=1) / jnp.maximum(n_pos, 1e-8)
-        fpr = jnp.sum(pred_pos * neg_mask[None, :], axis=1) / jnp.maximum(n_neg, 1e-8)
-        return fpr, tpr
-
-    def _shoelace_area(x, y):
-        """Shoelace formula for area under a polyline traced from (x,y) points."""
-        x2 = jnp.concatenate([x, x[:1]])
-        y2 = jnp.concatenate([y, y[:1]])
-        return 0.5 * jnp.abs(jnp.sum(x2[:-1] * y2[1:] - x2[1:] * y2[:-1]))
-
-    def pvoros_loss_fn(scores, labels, c_lo=C_LO, c_hi=C_HI, n_taus=50):
-        """
-        Differentiable proxy for Partial VOROS: soft ROC curve, restricted to
-        the FPR band implied by cost ratios [c_lo, c_hi] (approximated here as
-        the same-numbered band on the FPR axis — replace with your exact
-        cost-to-FPR mapping / convex-hull logic for a faithful metric).
-        Returns a LOSS (lower is better), i.e. negative partial volume.
-        """
-        taus = jnp.linspace(0.0, 1.0, n_taus)
-        scores = jax.nn.sigmoid(scores)  # squash logits to [0,1] to compare with taus
-        fpr, tpr = _soft_roc_points(scores, labels, taus)
-
-        band = (fpr >= c_lo) & (fpr <= c_hi)
-        band = band.astype(jnp.float32)
-        fpr_band = fpr * band
-        tpr_band = tpr * band
-
-        # sort by fpr ascending for a well-formed polygon
-        order = jnp.argsort(fpr_band)
-        fpr_sorted = fpr_band[order]
-        tpr_sorted = tpr_band[order]
-
-        area = _shoelace_area(fpr_sorted, tpr_sorted)
-        return -area  # maximize area under partial ROC band -> minimize negative area
-
-
-# ---------------------------------------------------------------------------
-# 4. Logistic regression head, trained with PVOROS via jax.grad
+# 3. Dynamic Score Thresholding & JAX Training Step
 # ---------------------------------------------------------------------------
 def init_params(key, dim):
-    w = jax.random.normal(key, (dim,)) * 0.01
-    b = jnp.zeros(())
-    return {"w": w, "b": b}
+    return {
+        "w": jax.random.normal(key, (dim,)) * 0.01,
+        "b": jnp.zeros(()),
+    }
 
 
-def forward(params, x):
-    return x @ params["w"] + params["b"]   # logits
-
-
-def loss_fn(params, x, y):
-    logits = forward(params, x)
-    return pvoros_loss_fn(logits, y)
-
-
-@jax.jit
-def train_step(params, opt_state, x, y, optimizer):
-    loss, grads = jax.value_and_grad(loss_fn)(params, x, y)
-    updates, opt_state = optimizer.update(grads, opt_state)
-    params = optax.apply_updates(params, updates)
-    return params, opt_state, loss
+def get_prediction_thresholds(y_pred, num_thresholds=100):
+    """Fixed-size (100,) thresholds, derived from the distribution of y_pred
+    via quantiles rather than a fixed [0,1] grid. Shape stays constant
+    regardless of len(y_pred), matching what pv_loss/compute_soft_roc expect."""
+    eps = 1e-5
+    q = jnp.linspace(1.0 - eps, eps, num_thresholds)
+    thresholds = jnp.quantile(y_pred, q)
+    return jax.lax.stop_gradient(thresholds)
 
 
 def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0):
@@ -255,34 +153,83 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0):
     optimizer = optax.adam(lr)
     opt_state = optimizer.init(params)
 
+    P = jnp.sum(y == 1.0)
+    N = jnp.sum(y == 0.0)
+    kappa = 0.5 * (P + N)
+    alpha = 0.6
+    min_fp_cost_ratio = 1 / 9
+    max_fp_cost_ratio = 1 / 6
+    n_points = 1000
+    temp = 0.03
+
+    def loss_fn(p):
+        logits = x @ p["w"] + p["b"]
+        y_pred = jax.nn.sigmoid(logits)
+
+        # Dynamic thresholds calculated directly from model output
+        thresholds = get_prediction_thresholds(y_pred)
+
+        return pv_loss(
+            p, x, y, P, N, kappa, alpha, thresholds,
+            min_fp_cost_ratio, max_fp_cost_ratio, n_points, temp
+        )
+
+    def train_step(params, opt_state):
+        loss, grads = jax.value_and_grad(loss_fn)(params)
+        updates, opt_state = optimizer.update(grads, opt_state)
+        params = optax.apply_updates(params, updates)
+        return params, opt_state, loss
+
     for epoch in range(epochs):
-        params, opt_state, loss = train_step(params, opt_state, x, y, optimizer)
+        params, opt_state, loss = train_step(params, opt_state)
         if epoch % 25 == 0 or epoch == epochs - 1:
-            print(f"epoch {epoch:4d}  pvoros_loss {loss:.4f}")
+            print(f"epoch {epoch:4d}  pvoros_loss {float(loss):.4f}")
 
     return params
 
 
 # ---------------------------------------------------------------------------
-# 5. Entry point
+# 4. Main Pipeline
 # ---------------------------------------------------------------------------
 def main():
     all_feats, all_labels = get_or_build_embeddings(DATA_DIR)
-    train_feats, train_labels, val_feats, val_labels = split_train_val(all_feats, all_labels)
+    print(f"DEBUG: After get_or_build_embeddings: all_feats.shape = {all_feats.shape}, all_labels.shape = {all_labels.shape}")
+    print(f"DEBUG: After get_or_build_embeddings: all_labels min = {all_labels.min()}, max = {all_labels.max()}, mean = {all_labels.mean():.6f}")
 
-    print(f"train: {train_feats.shape}, malignant rate {train_labels.mean():.3f}")
-    print(f"val:   {val_feats.shape}, malignant rate {val_labels.mean():.3f}")
+    # Corrected assignment for train_test_split output
+    train_feats, val_feats, train_labels, val_labels = split_train_val(all_feats, all_labels)
+
+    print(f"DEBUG: After split_train_val:")
+    print(f"DEBUG:   train_feats.shape = {train_feats.shape}, val_feats.shape = {val_feats.shape}")
+    print(f"DEBUG:   train_labels.shape = {train_labels.shape}, val_labels.shape = {val_labels.shape}")
+    print(f"DEBUG:   train_labels min = {train_labels.min()}, max = {train_labels.max()}, mean = {train_labels.mean():.6f}")
+    print(f"DEBUG:   val_labels min = {val_labels.min()}, max = {val_labels.max()}, mean = {val_labels.mean():.6f}")
+
+    print(f"Train samples: {train_feats.shape[0]}, Malignant rate: {train_labels.mean():.3f}")
+    print(f"Val samples:   {val_feats.shape[0]}, Malignant rate: {val_labels.mean():.3f}")
 
     params = train_logreg(train_feats, train_labels)
 
-    val_logits = forward(params, jnp.asarray(val_feats, dtype=jnp.float32))
-    val_probs = jax.nn.sigmoid(val_logits)
-    val_loss = pvoros_loss_fn(val_logits, jnp.asarray(val_labels, dtype=jnp.float32))
-    print(f"val PVOROS loss: {val_loss:.4f}")
+    # Validation Evaluation
+    x_val = jnp.asarray(val_feats, dtype=jnp.float32)
+    y_val = jnp.asarray(val_labels, dtype=jnp.float32)
+    logits_val = x_val @ params["w"] + params["b"]
+    y_pred_val = jax.nn.sigmoid(logits_val)
+    thresholds_val = get_prediction_thresholds(y_pred_val)
+
+    P_val = jnp.sum(y_val == 1.0)
+    N_val = jnp.sum(y_val == 0.0)
+    kappa_val = 0.5 * (P_val + N_val)
+
+    val_loss = pv_loss(
+        params, x_val, y_val, P_val, N_val, kappa_val, 0.6,
+        thresholds_val, 1/9, 1/6, 1000, 0.03
+    )
+    print(f"Val PVOROS loss: {float(val_loss):.4f}")
 
     np.save(CACHE_DIR / "logreg_w.npy", np.asarray(params["w"]))
     np.save(CACHE_DIR / "logreg_b.npy", np.asarray(params["b"]))
-    print("Saved weights to cache/logreg_w.npy, cache/logreg_b.npy")
+    print("Saved trained head weights to cache.")
 
 
 if __name__ == "__main__":

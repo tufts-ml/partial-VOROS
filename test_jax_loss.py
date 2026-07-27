@@ -95,16 +95,16 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
                     thresholds = _theta_c_to_wb_and_thresholds(w_vec, b_val, x_val)
 
                     loss, satisfy = pvoros_loss_kept_on_valid(
-                                                params=params_wb,
-                                                X=x_val,
-                                                y_true=y_val,
-                                                kappa=KAPPA,
-                                                alpha=ALPHA,
-                                                thresholds=thresholds,
-                                                min_fp_cost_ratio=MIN_FP_COST_RATIO,
-                                                max_fp_cost_ratio=MAX_FP_COST_RATIO,
-                                                n_points=N_POINTS,
-                                            )
+                        params=params_wb,
+                        X=x_val,
+                        y_true=y_val,
+                        kappa=KAPPA,
+                        alpha=ALPHA,
+                        thresholds=thresholds,
+                        min_fp_cost_ratio=MIN_FP_COST_RATIO,
+                        max_fp_cost_ratio=MAX_FP_COST_RATIO,
+                        n_points=N_POINTS,
+                    )
                     old_loss_val = float(loss)
 
                     new_loss_val = float(
