@@ -82,9 +82,13 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     P = jnp.maximum(jnp.sum(pos_mask), 1e-5)
     N = jnp.maximum(jnp.sum(neg_mask), 1e-5)
     
-    # Output soft curves
-    soft_tprs = soft_tps / P
-    soft_fprs = soft_fps / N
+    # # Output soft curves
+    # soft_tprs = soft_tps / P
+    # soft_fprs = soft_fps / N
+
+
+    soft_tprs = jnp.clip(soft_tps / P, 0.0, 1.0)
+    soft_fprs = jnp.clip(soft_fps / N, 0.0, 1.0)
     
     return soft_fprs, soft_tprs
 

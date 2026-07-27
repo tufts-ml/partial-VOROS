@@ -506,8 +506,19 @@ def max_area_per_t(fprs, tprs,κ,α,P,N,min_fp_cost_ratio,max_fp_cost_ratio,
                 lambda f, t: reduced_area(f, t, κ, α, P, N, fp_ratio)
             )
             all_areas = vmap_reduced_area(fprs, tprs)
-            imax = jnp.where(fprs.shape[0] > 0, jnp.argmax(all_areas), 0)
-            final_area = jnp.where(fprs.shape[0] > 0, all_areas[imax], 0.0)
+
+            # imax = jnp.where(fprs.shape[0] > 0, jnp.argmax(all_areas), 0)
+            # final_area = jnp.where(fprs.shape[0] > 0, all_areas[imax], 0.0)
+            # return final_area, imax
+
+
+            # Mask out origin/degenerate points where (fpr < 1e-4 and tpr < 1e-4)
+            # so (0,0) cannot be picked as the maximum area point!
+            non_origin_mask = jnp.where((fprs > 1e-4) | (tprs > 1e-4), 1.0, 0.0)
+            masked_areas = all_areas * non_origin_mask
+            
+            imax = jnp.argmax(masked_areas)
+            final_area = masked_areas[imax]
             return final_area, imax
 
         # Select the execution strategy. Since `do_fast_threshold_sel_via_cost` is a 
