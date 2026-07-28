@@ -123,7 +123,7 @@ if __name__ == "__main__":
         heatmap = np.zeros((grid_size, grid_size))
         for i in range(grid_size):
             for j in range(grid_size):
-                file_path = f"heatmaps/results_data_soft_pv/{seed}_res_{i}_{j}.txt"
+                file_path = f"heatmaps/results_data/{seed}_res_{i}_{j}.txt"
                 try:
                     with open(file_path, 'r') as f:
                         heatmap[i, j] = float(f.read().strip())

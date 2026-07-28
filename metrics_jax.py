@@ -75,8 +75,8 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     neg_mask = 1.0 - y_true_col
     
     # Compute soft True Positives and False Positives
-    soft_tps = jnp.sum(soft_indicators * pos_mask, axis=1)
-    soft_fps = jnp.sum(soft_indicators * neg_mask, axis=1)
+    soft_tps = jnp.sum(soft_indicators * pos_mask, axis=0)
+    soft_fps = jnp.sum(soft_indicators * neg_mask, axis=0)
     
     # Actual positive/negative counts (safe division)
     P = jnp.maximum(jnp.sum(pos_mask), 1e-5)
