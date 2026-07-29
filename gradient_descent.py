@@ -2,9 +2,9 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc
-from test_jax_loss import _theta_c_to_wb, _theta_c_to_wb_and_thresholds
-from metrics_jax import compute_soft_roc, get_prediction_thresholds_dynamic, pv_loss
+from sklearn.metrics import auc
+from test_jax_loss import _theta_c_to_wb
+from metrics_jax import compute_soft_roc
 import grad
 
 # Enable 64-bit precision in JAX
@@ -26,12 +26,6 @@ MAX_FP_COST_RATIO = 1/6
 N_POINTS = 50
 SIGMOID_K = 50
 TEMP = 0.03
-
-# def theta_c_to_wb(theta, c):
-#     """Converts boundary angle (theta) and intercept (c) to normal vector w and bias b."""
-#     w = jnp.array([jnp.sin(theta), -jnp.cos(theta)], dtype=jnp.float64)
-#     b = c
-#     return w, b
 
 def compute_decision_scores(X, theta, c):
     """Computes continuous decision scores w · x + b."""
@@ -92,22 +86,7 @@ if __name__ == "__main__":
                 # Compute loss and gradients using metrics_jax.pv_loss
                 loss_val, grads = loss_and_grad_wb(
                     params, X, Y, P, N, 1.0
-                    # KAPPA_FRAC, ALPHA, thresholds, 
-                    # MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, 
-                    # N_POINTS, TEMP
                 )
-                
-                # grad_w = grads_wb['w']
-                # grad_b = grads_wb['b']
-                
-                # # Chain rule: convert dL/dw and dL/db -> dL/dtheta and dL/dc
-                # grad_theta = grad_w[0] * jnp.cos(params['theta']) + grad_w[1] * jnp.sin(params['theta'])
-                # grad_c = grad_b
-                
-                # params = {
-                #     'theta': params['theta'] - LEARNING_RATE * jnp.clip(grad_theta, -1.0, 1.0),
-                #     'c': params['c'] - LEARNING_RATE * jnp.clip(grad_c, -2.0, 2.0),
-                # }
 
                 params = {
                     'theta': params['theta'] - LEARNING_RATE * jnp.clip(grads['theta'], -1.0, 1.0),
