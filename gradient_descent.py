@@ -25,6 +25,7 @@ N_POINTS = 50
 SIGMOID_K = 50
 
 import _geometry_jax
+import metrics_jax
 import grad
 
 if __name__ == "__main__":
@@ -39,18 +40,21 @@ if __name__ == "__main__":
     train_test = data['train_test']
     
     # Loss gradient setup using grad.py
-    loss_and_grad = jax.value_and_grad(grad.jax_voros_loss)
+    loss_and_grad = jax.value_and_grad(metrics_jax.pv_loss_theta_c)
     
     # Global grid space [-pi, pi] x [-3.0, 3.0]
     theta_vals = np.linspace(-np.pi, np.pi, grid_size)
     c_vals = np.linspace(-3.0, 3.0, grid_size)
     extent = [np.degrees(theta_vals[0]), np.degrees(theta_vals[-1]), c_vals[0], c_vals[-1]]
+    thresholds = np.linspace(1e-5, 1.0-1e-5, 100)
 
     # DICTIONARY TO STORE OPTIMAL PARAMETERS ACROSS SEEDS
     optimal_params = {}
 
     # Iterate over all 5 seeds
     for seed in SEEDS:
+        alpha = 0.6
+        kappa_frac = 0.5
         print("\n" + "=" * 80)
         print(f"PROCESSING SEED: {seed}")
         print("=" * 80)
@@ -61,6 +65,7 @@ if __name__ == "__main__":
 
         P = int(np.sum(Y == 1)) 
         N = int(np.sum(Y == 0)) 
+        kappa = kappa_frac * (P + N)
 
         best_score = -np.inf
         best_trial_idx = -1
@@ -80,7 +85,7 @@ if __name__ == "__main__":
             param_history = [(float(params['theta']), float(params['c']))]
             
             for step in range(1, MAX_STEPS + 1):
-                loss_val, grads = loss_and_grad(params, X, Y, P, N, M)
+                loss_val, grads = loss_and_grad(params, X, Y, P, N, kappa, alpha, thresholds, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO)
                 
                 params = {
                     'theta': params['theta'] - LEARNING_RATE * jnp.clip(grads['theta'], -1.0, 1.0),

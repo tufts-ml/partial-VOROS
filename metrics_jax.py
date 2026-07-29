@@ -180,3 +180,56 @@ def pv_loss(
 #     )
 # 
     # return -vor
+
+
+def pv_loss_theta_c(
+    params, 
+    X, 
+    y_true, 
+    P, 
+    N,
+    kappa, 
+    alpha,
+    thresholds,
+    min_fp_cost_ratio, 
+    max_fp_cost_ratio, 
+    n_points=1000, 
+    temp=0.02,
+    M=1):
+    """JAX-tracable negative VOROS loss using fixed-shape pointwise masking."""
+    theta = params['theta']
+    c = params['c']
+
+    w1 = M * jnp.sin(theta)
+    w2 = -M * jnp.cos(theta)
+    b = M * c * jnp.cos(theta)
+
+    # 1. Map parameters back to linear boundary weights
+    
+    logits = jnp.dot(X, jnp.array([w1,w2])) + b
+    y_pred = jax.nn.sigmoid(logits)
+    
+    # 2. Compute smooth ROC curve anchored at (0,0)
+    fprs_raw, tprs_raw = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    fprs_smooth = fprs_raw.at[0].set(0.0)
+    tprs_smooth = tprs_raw.at[0].set(0.0)
+    
+    # 3. Vectorized validity mask (returns 1.0 for valid points, 0.0 for invalid points)
+    # This preserves array shape (100,) so JAX can trace it without errors!
+    valid_mask = jax.vmap(
+        lambda f, t: jnp.where(_geometry_jax.keep_model(f, t, alpha, kappa, N, P), 1.0, 0.0)
+    )(fprs_smooth, tprs_smooth)
+    
+    satisfy = jnp.any(valid_mask > 0.0)
+    
+    # 4. Zero out invalid curve points pointwise without changing array shape
+    acc_fprs = fprs_smooth * valid_mask
+    acc_tprs = tprs_smooth * valid_mask
+    
+    # 5. Compute VOROS over the masked fixed-size arrays
+    voros_val = _geometry_jax.voros_jax(
+        acc_fprs, acc_tprs, kappa, alpha, P, N,
+        min_fp_cost_ratio, max_fp_cost_ratio, n_points
+    )
+    
+    return -jnp.where(satisfy, voros_val, 0.0)
