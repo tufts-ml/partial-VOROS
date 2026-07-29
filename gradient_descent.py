@@ -121,6 +121,60 @@ if __name__ == "__main__":
             'trial_num': best_trial_idx + 1
         }
 
+        # --- LOAD PRE-CALCULATED HEATMAP DATA ---
+        heatmap = np.zeros((grid_size, grid_size))
+        for i in range(grid_size):
+            for j in range(grid_size):
+                file_path = f"heatmaps/results_data/{seed}_res_{i}_{j}.txt"
+                try:
+                    with open(file_path, 'r') as f:
+                        heatmap[i, j] = float(f.read().strip())
+                except FileNotFoundError:
+                    heatmap[i, j] = 0.0
+
+        # --- PLOT OVERLAY ---
+        plt.figure(figsize=(10, 7))
+        im = plt.imshow(heatmap, origin='lower', extent=extent, aspect='auto', cmap='viridis')
+        cbar = plt.colorbar(im)
+        cbar.set_label('Partial VOROS Score Metric', fontsize=11, labelpad=10)
+
+        # 1. Plot all OTHER trajectories
+        for idx, trial_data in enumerate(all_trials_data):
+            if idx == best_trial_idx:
+                continue
+            
+            t_raw = trial_data['param_history'][:, 0]
+            t_norm = np.array([grad.wrap_to_pi(t) for t in t_raw])
+            t_deg = np.degrees(t_norm)
+            c_track = trial_data['param_history'][:, 1]
+
+            plt.plot(t_deg, c_track, color='white', linestyle='-', linewidth=0.8, alpha=0.35, zorder=2)
+            plt.scatter(t_deg[0], c_track[0], color='white', edgecolor='none', s=15, alpha=0.4, zorder=2)
+
+        plt.plot([], [], color='white', linestyle='-', linewidth=1.0, alpha=0.5, label='Other Init Paths')
+
+        # 2. Plot BEST trial trajectory
+        best_raw_thetas = best_data['param_history'][:, 0]
+        best_norm_thetas = np.array([grad.wrap_to_pi(t) for t in best_raw_thetas])
+        best_thetas_deg = np.degrees(best_norm_thetas)
+        best_cs_tracked = best_data['param_history'][:, 1]
+
+        plt.plot(best_thetas_deg, best_cs_tracked, color='white', linestyle='--', linewidth=1.2, alpha=0.8, zorder=3)
+        plt.quiver(best_thetas_deg[:-1], best_cs_tracked[:-1], 
+                   best_thetas_deg[1:] - best_thetas_deg[:-1], best_cs_tracked[1:] - best_cs_tracked[:-1], 
+                   scale_units='xy', angles='xy', scale=1, color='red', width=0.0035, zorder=4, label='Best Gradient Steps')
+        
+        plt.scatter(best_thetas_deg[0], best_cs_tracked[0], color='#ff7f0e', edgecolor='black', s=55, zorder=5, label='Best Start')
+        plt.scatter(best_thetas_deg[-1], best_cs_tracked[-1], color='#2ca02c', edgecolor='black', s=55, zorder=5, label='Best Convergence')
+
+        plt.title(f'Gradient Descent Path: {seed} (Best: Trial {best_data["trial_num"]})\nHeld Constant Vector Norm ||w|| = 1.0', fontsize=12, fontweight='bold', pad=15)
+        plt.xlabel('Decision Boundary Angle (Degrees)', fontsize=11)
+        plt.ylabel('Decision Boundary $y$-intercept ($c$)', fontsize=11)
+        plt.legend(loc='upper right', frameon=True, facecolor='white', framealpha=0.9)
+        plt.grid(True, linestyle=':', alpha=0.4, color='white')
+        
+        plt.xlim(np.degrees(theta_vals[0]), np.degrees(theta_vals[-1]))
+        plt.ylim(c_vals[0], c_vals[-1])
         # ---------------------------------------------------------
         # GENERATE ROC CURVE + ALPHA & KAPPA CONSTRAINTS PLOT
         # ---------------------------------------------------------

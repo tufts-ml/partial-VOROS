@@ -238,7 +238,6 @@ def main():
 
     params = train_logreg(X_train, y_train)
 
-    # Prepare Validation Data
     x_val = jnp.asarray(X_val, dtype=jnp.float64)
     y_val = jnp.asarray(y_val, dtype=jnp.float64)
     
@@ -250,11 +249,18 @@ def main():
     max_fp_cost_ratio = 1 / 6
     n_points = 1000
 
-    logits_val = x_val @ params["w"] + params["b"]
+    logits_val = jnp.dot(x_val, params["w"]) + params["b"]
     y_pred_val = jax.nn.sigmoid(logits_val)
 
+    # Print prediction spread to check for logit saturation
+    print("\n--- VALIDATION PREDICTIONS DIAGNOSTIC ---")
+    print(f"y_pred_val min : {float(jnp.min(y_pred_val)):.6f}")
+    print(f"y_pred_val max : {float(jnp.max(y_pred_val)):.6f}")
+    print(f"y_pred_val mean: {float(jnp.mean(y_pred_val)):.6f}")
+    print(f"y_pred_val std : {float(jnp.std(y_pred_val)):.6f}")
 
-    from _geometry_jax import total_region_area
+    from _geometry_jax import total_region_area, voros_jax
+    from sklearn.metrics import roc_curve
 
     train_tot_area, _ = total_region_area(
         jnp.sum(y_train == 1.0), jnp.sum(y_train == 0.0), alpha, 0.5 * len(y_train)
@@ -266,7 +272,7 @@ def main():
     print(f"\n[DIAGNOSTIC] Training Total Region Area  : {float(train_tot_area):.6f}")
     print(f"[DIAGNOSTIC] Validation Total Region Area: {float(val_tot_area):.6f}")
 
-    # --- Method 1: Static Grid Thresholds (Matches Training Pipeline) ---
+    # --- Method 1: Static Grid Thresholds ---
     static_val_thresholds = jnp.linspace(0.001, 0.999, 100)
     val_loss_static = pv_loss(
         params, x_val, y_val, P_val, N_val, kappa_val, alpha,
@@ -274,25 +280,26 @@ def main():
     )
     score_static = -float(val_loss_static)
 
-    # --- Method 2: Empirical (Regular) ROC Thresholds (Exact Score Boundaries) ---
-    # Extract exact unique prediction scores sorted descending
-    eps = 1e-5
-    roc_thresholds = jnp.unique(y_pred_val)[::-1]
-    roc_thresholds = jnp.clip(roc_thresholds, eps, 1.0 - eps)
-
-    # Use low temp (1e-4) to simulate crisp empirical step indicators
-    val_loss_roc = pv_loss(
-        params, x_val, y_val, P_val, N_val, kappa_val, alpha,
-        roc_thresholds, min_fp_cost_ratio, max_fp_cost_ratio, n_points, temp=1e-4
+    # --- Method 2: Empirical Hard ROC Curve (bypasses sigmoid saturation) ---
+    fprs_emp, tprs_emp, _ = roc_curve(np.asarray(y_val), np.asarray(y_pred_val))
+    
+    score_true = voros_jax(
+        jnp.asarray(fprs_emp, dtype=jnp.float64),
+        jnp.asarray(tprs_emp, dtype=jnp.float64),
+        κ=kappa_val,
+        α=alpha,
+        P=P_val,
+        N=N_val,
+        min_fp_cost_ratio=min_fp_cost_ratio,
+        max_fp_cost_ratio=max_fp_cost_ratio,
+        n_points=n_points
     )
-    score_roc = -float(val_loss_roc)
 
-    # --- Comparison Table ---
     print("\n" + "=" * 55)
     print("        VALIDATION PARTIAL VOROS COMPARISON")
     print("=" * 55)
-    print(f"Static Grid (temp=0.08)  | Loss: {float(val_loss_static):.4f} | VOROS: {score_static * 100:.2f}%")
-    print(f"Empirical ROC (Exact)    | Loss: {float(val_loss_roc):.4f} | VOROS: {score_roc * 100:.2f}%")
+    print(f"Static Soft Grid (temp=0.08) | Loss: {float(val_loss_static):.4f} | VOROS: {score_static * 100:.2f}%")
+    print(f"True Hard Empirical ROC     | VOROS: {float(score_true) * 100:.2f}%")
     print("=" * 55)
 
     np.save(CACHE_DIR / "logreg_w.npy", np.asarray(params["w"]))
