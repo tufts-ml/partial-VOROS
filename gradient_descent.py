@@ -134,7 +134,7 @@ if __name__ == "__main__":
 
         # --- PLOT OVERLAY ---
         plt.figure(figsize=(10, 7))
-        im = plt.imshow(heatmap, origin='lower', extent=extent, aspect='auto', cmap='viridis')
+        im = plt.imshow(heatmap, origin='lower', aspect='auto', cmap='viridis')
         cbar = plt.colorbar(im)
         cbar.set_label('Partial VOROS Score Metric', fontsize=11, labelpad=10)
 
