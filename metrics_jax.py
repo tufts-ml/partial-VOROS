@@ -52,7 +52,14 @@ def pvoros_score(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_fp_co
         min_fp_cost_ratio, max_fp_cost_ratio, n_points=n_points,
     ))
 
-def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
+def get_prediction_thresholds_dynamic(y_pred, num_thresholds=1000):
+    """Dynamic quantile thresholds for non-differentiable evaluation."""
+    eps = 1e-5
+    q = jnp.linspace(1.0 - eps, eps, num_thresholds)
+    thresholds = jnp.quantile(y_pred, q)
+    return jax.lax.stop_gradient(thresholds)
+
+def compute_soft_roc(y_true, y_pred, temp=0.02):
     """Computes a differentiable soft approximation of FPR and TPR.
     
     Args:
@@ -65,6 +72,7 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     # Reshape for broadcasting: (N, 1) and (1, M)
     y_true_col = y_true[:, None]
     y_pred_col = y_pred[:, None]
+    thresholds = get_prediction_thresholds_dynamic(y_pred)
     thresh_row = thresholds[None, :]
     
     # Soft approximation of indicator I(y_pred >= threshold)
@@ -82,15 +90,15 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     P = jnp.maximum(jnp.sum(pos_mask), 1e-5)
     N = jnp.maximum(jnp.sum(neg_mask), 1e-5)
     
-    # # Output soft curves
-    # soft_tprs = soft_tps / P
-    # soft_fprs = soft_fps / N
+    # Output soft curves
+    soft_tprs = soft_tps / P
+    soft_fprs = soft_fps / N
 
 
-    soft_tprs = jnp.clip(soft_tps / P, 0.0, 1.0)
-    soft_fprs = jnp.clip(soft_fps / N, 0.0, 1.0)
+    # soft_tprs = jnp.clip(soft_tps / P, 0.0, 1.0)
+    # soft_fprs = jnp.clip(soft_fps / N, 0.0, 1.0)
     
-    return soft_fprs, soft_tprs
+    return soft_fprs, soft_tprs, thresholds
 
 def pv_loss(
     params, 
@@ -100,7 +108,6 @@ def pv_loss(
     N,
     kappa, 
     alpha,
-    thresholds,
     min_fp_cost_ratio, 
     max_fp_cost_ratio, 
     n_points=1000, 
@@ -115,7 +122,7 @@ def pv_loss(
     y_pred = jax.nn.sigmoid(logits)
     
     # 2. Compute smooth ROC curve anchored at (0,0)
-    fprs_raw, tprs_raw = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    fprs_raw, tprs_raw, _ = compute_soft_roc(y_true, y_pred,temp=temp)
     fprs_smooth = fprs_raw.at[0].set(0.0)
     tprs_smooth = tprs_raw.at[0].set(0.0)
     
@@ -133,103 +140,57 @@ def pv_loss(
     
     # 5. Compute VOROS over the masked fixed-size arrays
     voros_val = _geometry_jax.voros_jax(
-        acc_fprs, acc_tprs, kappa, alpha, P, N,
-        min_fp_cost_ratio, max_fp_cost_ratio, n_points
+        acc_fprs, 
+        acc_tprs, 
+        kappa, 
+        alpha, 
+        P, 
+        N,
+        min_fp_cost_ratio, 
+        max_fp_cost_ratio, 
+        n_points
     )
     
     return -jnp.where(satisfy, voros_val, 0.0)
 
-# def pvoros_loss_kept_on_valid(
-#     params, 
-#     X, 
-#     y_true, 
-#     kappa, 
-#     alpha, 
-#     thresholds,
-#     min_fp_cost_ratio, 
-#     max_fp_cost_ratio, 
-#     n_points=1000, 
-#     temp=0.03):
-#     """Differentiable Partial VOROS loss function."""
-#     w, b = params
-
-#     # 1. Forward Pass
-#     logits = jnp.dot(X, w) + b
-#     y_pred = jax.nn.sigmoid(logits)
-
-#     P = jnp.sum(y_true == 1)
-#     N = jnp.sum(y_true == 0)
-
-#     # 2. Compute differentiable soft curves instead of discrete roc_curve
-#     fprs, tprs = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
-
-    _, acc_fprs, acc_tprs, _, _ = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N, P)
-
-#     # 3. Call JAX-compatible VOROS function
-#     vor = _geometry_jax.voros_jax(
-#         fprs=acc_fprs,
-#         tprs=acc_tprs,
-#         κ=kappa,
-#         α=alpha,
-#         P=P,
-#         N=N,
-#         min_fp_cost_ratio=min_fp_cost_ratio,  
-#         max_fp_cost_ratio=max_fp_cost_ratio,
-#         n_points=n_points,           
-#         thresholds=thresholds  # Must pass your defined array of thresholds here
-#     )
-# 
-    # return -vor
-
-
-def pv_loss_theta_c(
+def pvoros_loss_kept_on_valid(
     params, 
     X, 
     y_true, 
-    P, 
-    N,
     kappa, 
     alpha,
-    thresholds,
     min_fp_cost_ratio, 
     max_fp_cost_ratio, 
     n_points=1000, 
-    temp=0.02,
-    M=1):
-    """JAX-tracable negative VOROS loss using fixed-shape pointwise masking."""
-    theta = params['theta']
-    c = params['c']
+    temp=0.03):
+    """Differentiable Partial VOROS loss function."""
+    w = params["w"]
+    b = params["b"]
 
-    w1 = M * jnp.sin(theta)
-    w2 = -M * jnp.cos(theta)
-    b = M * c * jnp.cos(theta)
-
-    # 1. Map parameters back to linear boundary weights
-    
-    logits = jnp.dot(X, jnp.array([w1,w2])) + b
+    # 1. Forward Pass
+    logits = jnp.dot(X, w) + b
     y_pred = jax.nn.sigmoid(logits)
-    
-    # 2. Compute smooth ROC curve anchored at (0,0)
-    fprs_raw, tprs_raw = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
-    fprs_smooth = fprs_raw.at[0].set(0.0)
-    tprs_smooth = tprs_raw.at[0].set(0.0)
-    
-    # 3. Vectorized validity mask (returns 1.0 for valid points, 0.0 for invalid points)
-    # This preserves array shape (100,) so JAX can trace it without errors!
-    valid_mask = jax.vmap(
-        lambda f, t: jnp.where(_geometry_jax.keep_model(f, t, alpha, kappa, N, P), 1.0, 0.0)
-    )(fprs_smooth, tprs_smooth)
-    
-    satisfy = jnp.any(valid_mask > 0.0)
-    
-    # 4. Zero out invalid curve points pointwise without changing array shape
-    acc_fprs = fprs_smooth * valid_mask
-    acc_tprs = tprs_smooth * valid_mask
-    
-    # 5. Compute VOROS over the masked fixed-size arrays
-    voros_val = _geometry_jax.voros_jax(
-        acc_fprs, acc_tprs, kappa, alpha, P, N,
-        min_fp_cost_ratio, max_fp_cost_ratio, n_points
+
+    P = jnp.sum(y_true == 1)
+    N = jnp.sum(y_true == 0)
+
+    # 2. Compute differentiable soft curves instead of discrete roc_curve
+    fprs, tprs, thresholds = compute_soft_roc(y_true, y_pred,temp=temp)
+
+    _, acc_fprs, acc_tprs, _, _ = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N, P)
+
+    # 3. Call JAX-compatible VOROS function
+    vor = _geometry_jax.voros_jax(
+        fprs=acc_fprs,
+        tprs=acc_tprs,
+        κ=kappa,
+        α=alpha,
+        P=P,
+        N=N,
+        min_fp_cost_ratio=min_fp_cost_ratio,  
+        max_fp_cost_ratio=max_fp_cost_ratio,
+        n_points=n_points,           
+        thresholds=thresholds  # Must pass your defined array of thresholds here
     )
-    
-    return -jnp.where(satisfy, voros_val, 0.0)
+
+    return -vor

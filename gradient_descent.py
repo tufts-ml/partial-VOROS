@@ -1,9 +1,11 @@
-import sys
-import os
 import numpy as np
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from sklearn.metrics import auc
+from test_jax_loss import _theta_c_to_wb
+from metrics_jax import compute_soft_roc
+import grad
 
 # Enable 64-bit precision in JAX
 jax.config.update("jax_enable_x64", True)
@@ -23,35 +25,32 @@ MIN_FP_COST_RATIO = 1/9
 MAX_FP_COST_RATIO = 1/6
 N_POINTS = 50
 SIGMOID_K = 50
+TEMP = 0.03
 
-import _geometry_jax
-import metrics_jax
-import grad
+def compute_decision_scores(X, theta, c):
+    """Computes continuous decision scores w · x + b."""
+    w, b = _theta_c_to_wb(theta, c)
+    raw_scores = jnp.dot(X, w) + b
+    return jax.nn.sigmoid(raw_scores)
 
 if __name__ == "__main__":
     NUM_TRIALS = 10
     MAX_STEPS = 100
     LEARNING_RATE = 0.05
     grid_size = 30
-    M = 1.0 
 
     # Load metadata dictionary
     data = np.load('heatmaps/sweep_meta_data.npy', allow_pickle=True).item()
     train_test = data['train_test']
     
-    # Loss gradient setup using grad.py
-    loss_and_grad = jax.value_and_grad(metrics_jax.pv_loss_theta_c)
+    # Loss gradient setup wrt 'w' and 'b' using metrics_jax.pv_loss
+    loss_and_grad_wb = jax.value_and_grad(grad.jax_voros_loss)
     
-    # Global grid space [-pi, pi] x [-3.0, 3.0]
     theta_vals = np.linspace(-np.pi, np.pi, grid_size)
     c_vals = np.linspace(-3.0, 3.0, grid_size)
-    extent = [np.degrees(theta_vals[0]), np.degrees(theta_vals[-1]), c_vals[0], c_vals[-1]]
-    thresholds = np.linspace(1e-5, 1.0-1e-5, 100)
 
-    # DICTIONARY TO STORE OPTIMAL PARAMETERS ACROSS SEEDS
     optimal_params = {}
 
-    # Iterate over all 5 seeds
     for seed in SEEDS:
         alpha = 0.6
         kappa_frac = 0.5
@@ -59,7 +58,6 @@ if __name__ == "__main__":
         print(f"PROCESSING SEED: {seed}")
         print("=" * 80)
         
-        # Match dataset used in heatmap generation
         X = np.asarray(train_test[seed][0])
         Y = np.asarray(train_test[seed][2])
 
@@ -85,8 +83,14 @@ if __name__ == "__main__":
             param_history = [(float(params['theta']), float(params['c']))]
             
             for step in range(1, MAX_STEPS + 1):
-                loss_val, grads = loss_and_grad(params, X, Y, P, N, kappa, alpha, thresholds, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO)
+                w_vec, b_val = _theta_c_to_wb(params['theta'], params['c'])
+                wb_params = {'w': w_vec, 'b': b_val}
                 
+                # Compute loss and gradients using metrics_jax.pv_loss
+                loss_val, grads = loss_and_grad_wb(
+                    params, X, Y, P, N, 1.0
+                )
+
                 params = {
                     'theta': params['theta'] - LEARNING_RATE * jnp.clip(grads['theta'], -1.0, 1.0),
                     'c': params['c'] - LEARNING_RATE * jnp.clip(grads['c'], -2.0, 2.0),
@@ -96,7 +100,6 @@ if __name__ == "__main__":
                 param_history.append((float(params['theta']), float(params['c'])))
                 
             final_voros_score = -loss_history[-1]
-            print(f"Trial {trial:2d} | Init: ({np.degrees(theta_init):.1f}°, {c_init:.2f}) | Final pVOROS: {final_voros_score:.6f}")
             
             trial_record = {
                 'trial_num': trial,
@@ -110,9 +113,6 @@ if __name__ == "__main__":
                 best_score = final_voros_score
                 best_trial_idx = trial - 1
 
-        print(f"\nSEED {seed} BEST: Trial {best_trial_idx + 1} with Score {best_score:.6f}")
-
-        # --- SAVE OPTIMAL PARAMETERS FOR THIS SEED ---
         best_data = all_trials_data[best_trial_idx]
         optimal_theta = float(best_data['param_history'][-1, 0])
         optimal_c = float(best_data['param_history'][-1, 1])
@@ -137,7 +137,7 @@ if __name__ == "__main__":
 
         # --- PLOT OVERLAY ---
         plt.figure(figsize=(10, 7))
-        im = plt.imshow(heatmap, origin='lower', extent=extent, aspect='auto', cmap='viridis')
+        im = plt.imshow(heatmap, origin='lower', aspect='auto', cmap='viridis')
         cbar = plt.colorbar(im)
         cbar.set_label('Partial VOROS Score Metric', fontsize=11, labelpad=10)
 
@@ -178,18 +178,81 @@ if __name__ == "__main__":
         
         plt.xlim(np.degrees(theta_vals[0]), np.degrees(theta_vals[-1]))
         plt.ylim(c_vals[0], c_vals[-1])
+        # ---------------------------------------------------------
+        # GENERATE ROC CURVE + ALPHA & KAPPA CONSTRAINTS PLOT
+        # ---------------------------------------------------------
+        scores = compute_decision_scores(X, optimal_theta, optimal_c)
+        fprs_raw, tprs_raw, _ = compute_soft_roc(Y, scores, temp=TEMP)
+        fprs_smooth = fprs_raw.at[0].set(0.0)
+        tprs_smooth = tprs_raw.at[0].set(0.0)
+        roc_auc = auc(fprs_smooth, tprs_smooth)
+
+        plt.figure(figsize=(8, 8))
+        
+        # 1. Plot empirical ROC curve
+        plt.plot(fprs_smooth, tprs_smooth, color='#1f77b4', lw=2.5, label=f'ROC Curve (AUC = {roc_auc:.3f})')
+        plt.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=1.2, label='Chance Baseline')
+
+        # 2. Alpha (Precision) Constraint Boundary
+        prevalence = P / (P + N)
+        alpha_slope = ALPHA * (1 - prevalence) / (prevalence * (1 - ALPHA))
+        
+        fpr_grid = np.linspace(0, 1, 200)
+        tpr_alpha_bound = alpha_slope * fpr_grid
+
+        plt.plot(
+            fpr_grid, tpr_alpha_bound, color='#d62728', linestyle='--', lw=2.0, 
+            label=f'Precision Boundary $\\alpha$ (Slope = {alpha_slope:.2f})'
+        )
+
+        # 3. Kappa (Capacity / Alarm Budget) Constraint Boundary
+        kappa = KAPPA_FRAC * (P + N)
+        kappa_slope = -(N / P)
+        tpr_kappa_bound = kappa_slope * fpr_grid + (kappa / P)
+
+        plt.plot(
+            fpr_grid, tpr_kappa_bound, color='#2ca02c', linestyle='--', lw=2.0, 
+            label=f'Capacity Boundary $\\kappa$ (Slope = {kappa_slope:.2f})'
+        )
+
+        # 4. Highlight the Feasible Operating Region
+        # Clamp both lower and upper bounds strictly to the [0, 1] ROC square range
+        y_lower_clamped = np.clip(tpr_alpha_bound, 0.0, 1.0)
+        y_upper_clamped = np.clip(tpr_kappa_bound, 0.0, 1.0)
+
+        # Fill region where upper bound strictly exceeds lower bound
+        plt.fill_between(
+            fpr_grid, 
+            y_lower_clamped, 
+            y_upper_clamped, 
+            where=(y_upper_clamped >= y_lower_clamped),
+            color='#ff7f0e', 
+            alpha=0.18, 
+            label='Feasible Region'
+        )
+
+        # Formatting
+        plt.xlim([-0.02, 1.02])
+        plt.ylim([-0.02, 1.02])
+        plt.xlabel('False Positive Rate (FPR)', fontsize=12)
+        plt.ylabel('True Positive Rate (TPR)', fontsize=12)
+        plt.title(
+            f'ROC Curve with Dual Slope Bounds ($\\alpha$ & $\\kappa$): {seed}\n'
+            f'Optimal $\\theta$: {np.degrees(optimal_theta):.1f}°, $c$: {optimal_c:.3f}', 
+            fontsize=13, fontweight='bold', pad=12
+        )
+        plt.grid(True, linestyle=':', alpha=0.6)
+        plt.legend(loc='lower right', frameon=True, facecolor='white', framealpha=0.9, fontsize=10)
         
         plt.tight_layout()
-        out_pdf = f"gradient_soft_pvoros_trajectory_{seed.replace('.npy', '')}.pdf"
-        plt.savefig(out_pdf, format='pdf', dpi=300)
+        out_roc_pdf = f"roc_dual_slope_bounded_{seed.replace('.npy', '')}.pdf"
+        plt.savefig(out_roc_pdf, format='pdf', dpi=300)
         plt.close()
-        print(f"Saved plot: {out_pdf}")
+        print(f"Saved plot: {out_roc_pdf}")
 
-    # --- SAVE ALL BEST OPTIMAL PARAMETERS TO AN OUTPUT FILE ---
+    # Save optimal parameters
     save_filepath = 'best_optimal_params.npy'
     np.save(save_filepath, optimal_params, allow_pickle=True)
     print("\n" + "=" * 80)
     print(f"SUCCESSFULLY SAVED BEST PARAMETERS TO: {save_filepath}")
     print("=" * 80)
-    for seed, res in optimal_params.items():
-        print(f"{seed:<20} | Theta*: {np.degrees(res['theta']):6.2f}° | c*: {res['c']:7.4f} | Best Score: {res['best_score']:.6f}")
