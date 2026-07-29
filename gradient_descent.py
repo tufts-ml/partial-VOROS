@@ -167,7 +167,7 @@ if __name__ == "__main__":
         # 3. Kappa (Capacity / Alarm Budget) Constraint Boundary
         kappa = KAPPA_FRAC * (P + N)
         kappa_slope = -(N / P)
-        tpr_kappa_bound = kappa_slope * fpr_grid + 1.0
+        tpr_kappa_bound = kappa_slope * fpr_grid + (kappa / P)
 
         plt.plot(
             fpr_grid, tpr_kappa_bound, color='#2ca02c', linestyle='--', lw=2.0, 
