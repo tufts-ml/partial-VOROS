@@ -154,6 +154,40 @@ def pv_loss(
     return -jnp.where(satisfy, voros_val, 0.0)
 
 def pvoros_loss_kept_on_valid(
+<<<<<<< HEAD
+=======
+    params, X, y_true, kappa, alpha, thresholds,min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.03):
+
+    """Differentiable Partial VOROS loss function."""
+    w = params['w']
+    b = params['b']
+    logits = jnp.dot(X, w) + b
+    y_pred = jax.nn.sigmoid(logits)
+    P = jnp.sum(y_true == 1)
+    N = jnp.sum(y_true == 0)
+    fprs, tprs = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+
+    _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N, P)
+
+#     # 3. Call JAX-compatible VOROS function
+    vor = _geometry_jax.voros_jax(
+        fprs=acc_fprs,
+        tprs=acc_tprs,
+        κ=kappa,
+        α=alpha,
+        P=P,
+        N=N,
+        min_fp_cost_ratio=min_fp_cost_ratio,  
+        max_fp_cost_ratio=max_fp_cost_ratio,
+        n_points=n_points,           
+        thresholds=thresholds  # Must pass your defined array of thresholds here
+    )
+
+    return -vor, satisfy
+
+
+def pv_loss_theta_c(
+>>>>>>> 83f7bd1 (testjax loss)
     params, 
     X, 
     y_true, 
@@ -170,6 +204,7 @@ def pvoros_loss_kept_on_valid(
     # 1. Forward Pass
     logits = jnp.dot(X, w) + b
     y_pred = jax.nn.sigmoid(logits)
+<<<<<<< HEAD
 
     P = jnp.sum(y_true == 1)
     N = jnp.sum(y_true == 0)
@@ -191,6 +226,32 @@ def pvoros_loss_kept_on_valid(
         max_fp_cost_ratio=max_fp_cost_ratio,
         n_points=n_points,           
         thresholds=thresholds  # Must pass your defined array of thresholds here
+=======
+    
+    # 2. Compute smooth ROC curve anchored at (0,0)
+    # fprs_raw, tprs_raw = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    # fprs_smooth = fprs_raw.at[0].set(0.0)
+    # tprs_smooth = tprs_raw.at[0].set(0.0)
+
+    fprs_smooth, tprs_smooth = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    
+    # 3. Vectorized validity mask (returns 1.0 for valid points, 0.0 for invalid points)
+    # This preserves array shape (100,) so JAX can trace it without errors!
+    valid_mask = jax.vmap(
+        lambda f, t: jnp.where(_geometry_jax.keep_model(f, t, alpha, kappa, N, P), 1.0, 0.0)
+    )(fprs_smooth, tprs_smooth)
+    
+    satisfy = jnp.any(valid_mask > 0.0)
+    
+    # 4. Zero out invalid curve points pointwise without changing array shape
+    acc_fprs = fprs_smooth * valid_mask
+    acc_tprs = tprs_smooth * valid_mask
+    
+    # 5. Compute VOROS over the masked fixed-size arrays
+    voros_val = _geometry_jax.voros_jax(
+        acc_fprs, acc_tprs, kappa, alpha, P, N,
+        min_fp_cost_ratio, max_fp_cost_ratio, n_points
+>>>>>>> 83f7bd1 (testjax loss)
     )
 
     return -vor

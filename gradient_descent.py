@@ -63,6 +63,7 @@ if __name__ == "__main__":
 
         P = int(np.sum(Y == 1)) 
         N = int(np.sum(Y == 0)) 
+        print(f"prevalence = {(P/(P+N)):.3f}")
         kappa = kappa_frac * (P + N)
 
         best_score = -np.inf
