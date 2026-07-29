@@ -3,6 +3,9 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
+from test_jax_loss import _theta_c_to_wb, _theta_c_to_wb_and_thresholds
+from metrics_jax import compute_soft_roc, get_prediction_thresholds_dynamic, pv_loss
+import grad
 
 # Enable 64-bit precision in JAX
 jax.config.update("jax_enable_x64", True)
@@ -24,19 +27,17 @@ N_POINTS = 50
 SIGMOID_K = 50
 TEMP = 0.03
 
-import metrics_jax
-import test_jax_loss
-
-def theta_c_to_wb(theta, c):
-    """Converts boundary angle (theta) and intercept (c) to normal vector w and bias b."""
-    w = jnp.array([jnp.sin(theta), -jnp.cos(theta)], dtype=jnp.float64)
-    b = c
-    return w, b
+# def theta_c_to_wb(theta, c):
+#     """Converts boundary angle (theta) and intercept (c) to normal vector w and bias b."""
+#     w = jnp.array([jnp.sin(theta), -jnp.cos(theta)], dtype=jnp.float64)
+#     b = c
+#     return w, b
 
 def compute_decision_scores(X, theta, c):
     """Computes continuous decision scores w · x + b."""
-    w = np.array([np.sin(theta), -np.cos(theta)])
-    return np.dot(X, w) + c
+    w, b = _theta_c_to_wb(theta, c)
+    raw_scores = jnp.dot(X, w) + b
+    return jax.nn.sigmoid(raw_scores)
 
 if __name__ == "__main__":
     NUM_TRIALS = 10
@@ -49,7 +50,7 @@ if __name__ == "__main__":
     train_test = data['train_test']
     
     # Loss gradient setup wrt 'w' and 'b' using metrics_jax.pv_loss
-    loss_and_grad_wb = jax.value_and_grad(metrics_jax.pv_loss, argnums=0)
+    loss_and_grad_wb = jax.value_and_grad(grad.jax_voros_loss)
     
     theta_vals = np.linspace(-np.pi, np.pi, grid_size)
     c_vals = np.linspace(-3.0, 3.0, grid_size)
@@ -85,30 +86,32 @@ if __name__ == "__main__":
             param_history = [(float(params['theta']), float(params['c']))]
             
             for step in range(1, MAX_STEPS + 1):
-                w_vec, b_val = theta_c_to_wb(params['theta'], params['c'])
+                w_vec, b_val = _theta_c_to_wb(params['theta'], params['c'])
                 wb_params = {'w': w_vec, 'b': b_val}
                 
-                # Compute dynamic thresholds based on data projection
-                thresholds = test_jax_loss._theta_c_to_wb_and_thresholds(params['theta'], params['c'], X)
-                
                 # Compute loss and gradients using metrics_jax.pv_loss
-                loss_val, grads_wb = loss_and_grad_wb(
-                    wb_params, X, Y, P, N, 
-                    KAPPA_FRAC, ALPHA, thresholds, 
-                    MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, 
-                    N_POINTS, TEMP
+                loss_val, grads = loss_and_grad_wb(
+                    params, X, Y, P, N, 1.0
+                    # KAPPA_FRAC, ALPHA, thresholds, 
+                    # MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, 
+                    # N_POINTS, TEMP
                 )
                 
-                grad_w = grads_wb['w']
-                grad_b = grads_wb['b']
+                # grad_w = grads_wb['w']
+                # grad_b = grads_wb['b']
                 
-                # Chain rule: convert dL/dw and dL/db -> dL/dtheta and dL/dc
-                grad_theta = grad_w[0] * jnp.cos(params['theta']) + grad_w[1] * jnp.sin(params['theta'])
-                grad_c = grad_b
+                # # Chain rule: convert dL/dw and dL/db -> dL/dtheta and dL/dc
+                # grad_theta = grad_w[0] * jnp.cos(params['theta']) + grad_w[1] * jnp.sin(params['theta'])
+                # grad_c = grad_b
                 
+                # params = {
+                #     'theta': params['theta'] - LEARNING_RATE * jnp.clip(grad_theta, -1.0, 1.0),
+                #     'c': params['c'] - LEARNING_RATE * jnp.clip(grad_c, -2.0, 2.0),
+                # }
+
                 params = {
-                    'theta': params['theta'] - LEARNING_RATE * jnp.clip(grad_theta, -1.0, 1.0),
-                    'c': params['c'] - LEARNING_RATE * jnp.clip(grad_c, -2.0, 2.0),
+                    'theta': params['theta'] - LEARNING_RATE * jnp.clip(grads['theta'], -1.0, 1.0),
+                    'c': params['c'] - LEARNING_RATE * jnp.clip(grads['c'], -2.0, 2.0),
                 }
                 
                 loss_history.append(float(loss_val))
@@ -143,13 +146,15 @@ if __name__ == "__main__":
         # GENERATE ROC CURVE + ALPHA & KAPPA CONSTRAINTS PLOT
         # ---------------------------------------------------------
         scores = compute_decision_scores(X, optimal_theta, optimal_c)
-        fpr, tpr, _ = roc_curve(Y, scores)
-        roc_auc = auc(fpr, tpr)
+        fprs_raw, tprs_raw, _ = compute_soft_roc(Y, scores, temp=TEMP)
+        fprs_smooth = fprs_raw.at[0].set(0.0)
+        tprs_smooth = tprs_raw.at[0].set(0.0)
+        roc_auc = auc(fprs_smooth, tprs_smooth)
 
         plt.figure(figsize=(8, 8))
         
         # 1. Plot empirical ROC curve
-        plt.plot(fpr, tpr, color='#1f77b4', lw=2.5, label=f'ROC Curve (AUC = {roc_auc:.3f})')
+        plt.plot(fprs_smooth, tprs_smooth, color='#1f77b4', lw=2.5, label=f'ROC Curve (AUC = {roc_auc:.3f})')
         plt.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=1.2, label='Chance Baseline')
 
         # 2. Alpha (Precision) Constraint Boundary

@@ -52,7 +52,14 @@ def pvoros_score(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_fp_co
         min_fp_cost_ratio, max_fp_cost_ratio, n_points=n_points,
     ))
 
-def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
+def get_prediction_thresholds_dynamic(y_pred, num_thresholds=1000):
+    """Dynamic quantile thresholds for non-differentiable evaluation."""
+    eps = 1e-5
+    q = jnp.linspace(1.0 - eps, eps, num_thresholds)
+    thresholds = jnp.quantile(y_pred, q)
+    return jax.lax.stop_gradient(thresholds)
+
+def compute_soft_roc(y_true, y_pred, temp=0.02):
     """Computes a differentiable soft approximation of FPR and TPR.
     
     Args:
@@ -65,6 +72,7 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     # Reshape for broadcasting: (N, 1) and (1, M)
     y_true_col = y_true[:, None]
     y_pred_col = y_pred[:, None]
+    thresholds = get_prediction_thresholds_dynamic(y_pred)
     thresh_row = thresholds[None, :]
     
     # Soft approximation of indicator I(y_pred >= threshold)
@@ -75,8 +83,8 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     neg_mask = 1.0 - y_true_col
     
     # Compute soft True Positives and False Positives
-    soft_tps = jnp.sum(soft_indicators * pos_mask, axis=1)
-    soft_fps = jnp.sum(soft_indicators * neg_mask, axis=1)
+    soft_tps = jnp.sum(soft_indicators * pos_mask, axis=0)
+    soft_fps = jnp.sum(soft_indicators * neg_mask, axis=0)
     
     # Actual positive/negative counts (safe division)
     P = jnp.maximum(jnp.sum(pos_mask), 1e-5)
@@ -90,7 +98,7 @@ def compute_soft_roc(y_true, y_pred, thresholds, temp=0.02):
     # soft_tprs = jnp.clip(soft_tps / P, 0.0, 1.0)
     # soft_fprs = jnp.clip(soft_fps / N, 0.0, 1.0)
     
-    return soft_fprs, soft_tprs
+    return soft_fprs, soft_tprs, thresholds
 
 def pv_loss(
     params, 
@@ -100,7 +108,6 @@ def pv_loss(
     N,
     kappa, 
     alpha,
-    thresholds,
     min_fp_cost_ratio, 
     max_fp_cost_ratio, 
     n_points=1000, 
@@ -115,7 +122,7 @@ def pv_loss(
     y_pred = jax.nn.sigmoid(logits)
     
     # 2. Compute smooth ROC curve anchored at (0,0)
-    fprs_raw, tprs_raw = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    fprs_raw, tprs_raw, _ = compute_soft_roc(y_true, y_pred,temp=temp)
     fprs_smooth = fprs_raw.at[0].set(0.0)
     tprs_smooth = tprs_raw.at[0].set(0.0)
     
@@ -133,8 +140,15 @@ def pv_loss(
     
     # 5. Compute VOROS over the masked fixed-size arrays
     voros_val = _geometry_jax.voros_jax(
-        acc_fprs, acc_tprs, kappa, alpha, P, N,
-        min_fp_cost_ratio, max_fp_cost_ratio, n_points
+        acc_fprs, 
+        acc_tprs, 
+        kappa, 
+        alpha, 
+        P, 
+        N,
+        min_fp_cost_ratio, 
+        max_fp_cost_ratio, 
+        n_points
     )
     
     return -jnp.where(satisfy, voros_val, 0.0)
@@ -144,8 +158,7 @@ def pvoros_loss_kept_on_valid(
     X, 
     y_true, 
     kappa, 
-    alpha, 
-    thresholds,
+    alpha,
     min_fp_cost_ratio, 
     max_fp_cost_ratio, 
     n_points=1000, 
@@ -162,7 +175,7 @@ def pvoros_loss_kept_on_valid(
     N = jnp.sum(y_true == 0)
 
     # 2. Compute differentiable soft curves instead of discrete roc_curve
-    fprs, tprs = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    fprs, tprs, thresholds = compute_soft_roc(y_true, y_pred,temp=temp)
 
     _, acc_fprs, acc_tprs, _, _ = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N, P)
 
