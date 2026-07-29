@@ -8,12 +8,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from metrics_jax import pv_loss_keep_model, pvoros_loss_kept_on_valid
+from metrics_jax import pv_loss, pvoros_loss_kept_on_valid
 
 # Generate 10 reproducible random (theta, c) pairs
 rng = np.random.default_rng(seed=42)
 
-KAPPA_FRAC = 0.5
+KAPPA_FRAC = 0.3
 ALPHA = 0.6
 MIN_FP_COST_RATIO = 1 / 9
 MAX_FP_COST_RATIO = 1 / 6
@@ -59,8 +59,8 @@ def _theta_c_to_wb(theta, c, M=1.0):
     """Convert angular (theta, c) parametrization to (w, b) expected by pvoros_loss."""
     w1 = M * jnp.sin(theta)
     w2 = -M * jnp.cos(theta)
-    w_vec = jnp.array([w1, w2], dtype=jnp.float32)
-    b_val = jnp.array(M * c * jnp.cos(theta), dtype=jnp.float32)
+    w_vec = jnp.array([w1, w2], dtype=jnp.float64)
+    b_val = jnp.array(M * c * jnp.cos(theta), dtype=jnp.float64)
     return w_vec, b_val
 
 
@@ -74,8 +74,8 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
     def _get_data(self, seed_filename):
         if seed_filename not in self._data_cache:
             x_val, y_val = load_seed_data(seed_filename)
-            x_val = jnp.asarray(x_val, dtype=jnp.float32)
-            y_val = jnp.asarray(y_val, dtype=jnp.float32)
+            x_val = jnp.asarray(x_val, dtype=jnp.float64)
+            y_val = jnp.asarray(y_val, dtype=jnp.float64)
             self._data_cache[seed_filename] = (x_val, y_val)
         return self._data_cache[seed_filename]
 
@@ -86,7 +86,7 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
             for theta, c in THETA_C_PAIRS:
                 with self.subTest(seed_filename=seed_filename, theta=theta, c=c):
                     w_vec, b_val = _theta_c_to_wb(theta, c)
-                    params_wb = (w_vec, b_val)
+                    params_wb = {'w': w_vec, 'b': b_val}
 
                     P = float(jnp.sum(y_val == 1.0))
                     N = float(jnp.sum(y_val == 0.0))
@@ -94,7 +94,7 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
 
                     thresholds = _theta_c_to_wb_and_thresholds(w_vec, b_val, x_val)
 
-                    loss, satisfy = pvoros_loss_kept_on_valid(
+                    old_loss_val = float(pvoros_loss_kept_on_valid(
                         params=params_wb,
                         X=x_val,
                         y_true=y_val,
@@ -102,17 +102,23 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
                         alpha=ALPHA,
                         thresholds=thresholds,
                         min_fp_cost_ratio=MIN_FP_COST_RATIO,
-                        max_fp_cost_ratio=MAX_FP_COST_RATIO,
-                        n_points=N_POINTS,
-                    )
-                    old_loss_val = float(loss)
+                        max_fp_cost_ratio=MAX_FP_COST_RATIO
+                    ))
 
-                    new_loss_val = float(
-                        pv_loss_keep_model(
-                            params_wb, x_val, y_val, P, N, KAPPA, ALPHA, thresholds,
-                            MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
-                        )
+                    new_loss_val, satisfy = pv_loss(
+                        params_wb, 
+                        x_val, 
+                        y_val, 
+                        P, 
+                        N, 
+                        KAPPA, 
+                        ALPHA, 
+                        thresholds,
+                        MIN_FP_COST_RATIO, 
+                        MAX_FP_COST_RATIO
                     )
+
+                    new_loss_val = float(new_loss_val)
 
                     print(
                         f"seed={seed_filename}, theta={theta:.4f}, c={c:.4f}: "
@@ -143,7 +149,7 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
             for theta, c in THETA_C_PAIRS:
                 with self.subTest(seed_filename=seed_filename, theta=theta, c=c):
                     w_vec, b_val = _theta_c_to_wb(theta, c)
-                    params_wb = (w_vec, b_val)
+                    params_wb = {'w': w_vec, 'b': b_val}
 
                     P = float(jnp.sum(y_val == 1))
                     N = float(jnp.sum(y_val == 0))
@@ -154,12 +160,20 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
                     impossible_alpha = 0.9999
                     impossible_kappa = -1.0
 
-                    loss = float(
-                        pv_loss_keep_model(
-                            params_wb, x_val, y_val, P, N, impossible_kappa, impossible_alpha,
-                            thresholds, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
-                        )
+                    loss, _ = pv_loss(
+                        params_wb, 
+                        x_val, 
+                        y_val, 
+                        P, 
+                        N, 
+                        impossible_kappa, 
+                        impossible_alpha,
+                        thresholds, 
+                        MIN_FP_COST_RATIO, 
+                        MAX_FP_COST_RATIO
                     )
+
+                    loss = float(loss)
                     self.assertAlmostEqual(loss, 0.0, places=9)
 
 
