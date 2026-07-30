@@ -7,6 +7,7 @@ import numpy as np
 import time
 import grad
 import train_and_voros
+import metrics_jax
 
 class TestGeometry(unittest.TestCase):
     def test_area_triangle(self):
@@ -657,9 +658,10 @@ class TestGeometry(unittest.TestCase):
                     N,
                     1/9,
                     1/6,
-                    n_points=50,  # <-- MATCHES N_POINTS=50 in grad.py
+                    n_points=1000,  # <-- MATCHES N_POINTS=50 in grad.py
                 )
             )
+            print("ref voros: ", voros_val)
             total_envelope_area, _ = _geometry_jax.total_region_area(P, N, 0.6, kappa)
             env_area_scalar = float(np.asarray(total_envelope_area).item())
             return min(voros_val, env_area_scalar)
@@ -687,10 +689,13 @@ class TestGeometry(unittest.TestCase):
             P = int(np.sum(Y == 1))
             N = int(np.sum(Y == 0))
 
+            kappa = 0.5*(P+N)
+
             # Sample random evaluation parameters (theta, c, M)
             theta_val = np.random.uniform(0, np.pi/4)
             c_val = np.random.uniform(-3.0, 3.0)
             M_val = np.random.uniform(0.5, 3.0)
+            thresholds = jnp.linspace(1e-5, 1.0-1e-5, 100)
 
             params = {
                 "theta": jnp.array(theta_val, dtype=jnp.float64),
@@ -701,7 +706,7 @@ class TestGeometry(unittest.TestCase):
             ref_score = self.compute_reference_pvoros_kept_on_valid(X, Y, theta_val, c_val, M_val)
 
             # 2. Compute score using the JAX gradient loss function (-1 * loss)
-            loss_val = float(grad.jax_voros_loss(params, X, Y, P, N, M=M_val))
+            loss_val = float(metrics_jax.pv_loss_theta_c(params, X, Y, P, N, kappa, 0.6, thresholds, 1/9, 1/6, n_points=1000, temp = 0.02, M = M_val))
             jax_score = -loss_val
 
             print(
