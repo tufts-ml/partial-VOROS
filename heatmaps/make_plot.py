@@ -26,7 +26,7 @@ for ax, seed in zip(axs.flat, clfs):
     
     for i in range(grid_size):
         for j in range(grid_size):
-            file_path = f"results_data/{seed}_res_{i}_{j}.txt"
+            file_path = f"results_data_soft_pv/{seed}_res_{i}_{j}.txt"
             try:
                 with open(file_path, 'r') as f:
                     heatmap[i, j] = float(f.read().strip())
@@ -41,7 +41,7 @@ for ax, seed in zip(axs.flat, clfs):
     fig.colorbar(im, ax=ax, label='pVOROS score')
     ax.set_xlabel('Angle (Degrees)')
     ax.set_ylabel('y-intercept (c)')
-    ax.set_title(f'True pVOROS (Full 360° Sweep, M=1): {seed}')
+    ax.set_title(f'Soft pVOROS (Sigmoid K=10): {seed}')
     
     # # Plot baseline anchor point
     # ax.scatter([np.degrees(theta_center)], [c_center], color='white', edgecolor='black', s=80, label='Trained')
@@ -49,5 +49,5 @@ for ax, seed in zip(axs.flat, clfs):
 
 axs.flat[-1].set_visible(False)
 plt.tight_layout()
-plt.savefig('pvoros_angle_intercept_grid_360.pdf', format='pdf', dpi=300)
+plt.savefig('soft_pv_k=10.pdf', format='pdf', dpi=300)
 plt.show()

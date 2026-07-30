@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+os.environ["JAX_PLATFORMS"] = "cpu"
 import sys
 import argparse
 import numpy as np
@@ -15,7 +16,7 @@ kappa_frac = 0.5
 min_ratio = 1/9
 max_ratio = 1/6
 GRID_N_POINTS = 50 
-SIGMOID_K = 50
+SIGMOID_K = 10
 
 def sigmoid_approximation(p, tau, k):
     return (1 + np.exp(-k * (p - tau))) ** -1
