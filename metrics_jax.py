@@ -111,7 +111,7 @@ def pv_loss(
     min_fp_cost_ratio, 
     max_fp_cost_ratio, 
     n_points=1000, 
-    temp=0.03):
+    temp=0.02):
     """JAX-tracable negative VOROS loss using fixed-shape pointwise masking."""
     w = params["w"]
     b = params["b"]
@@ -154,7 +154,7 @@ def pv_loss(
     return -jnp.where(satisfy, voros_val, 0.0)
 
 def pvoros_loss_kept_on_valid(
-    params, X, y_true, kappa, alpha, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.03):
+    params, X, y_true, kappa, alpha, thresholds,min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.02):
 
     """Differentiable Partial VOROS loss function."""
     w = params['w']
@@ -188,48 +188,33 @@ def pv_loss_theta_c(
     params, 
     X, 
     y_true, 
+    P,
+    N,
     kappa, 
     alpha,
     min_fp_cost_ratio, 
     max_fp_cost_ratio, 
     n_points=1000, 
-    temp=0.03):
+    temp=0.02,
+    M=1.0):
     """Differentiable Partial VOROS loss function."""
-    w = params["w"]
-    b = params["b"]
+    theta = params['theta']
+    c = params['c']
+
+    w1 = M * jnp.sin(theta)
+    w2 = -M * jnp.cos(theta)
+    b = M * c * jnp.cos(theta)
+    w = jnp.array([w1,w2])
 
     # 1. Forward Pass
     logits = jnp.dot(X, w) + b
     y_pred = jax.nn.sigmoid(logits)
 
-    P = jnp.sum(y_true == 1)
-    N = jnp.sum(y_true == 0)
-
-    # 2. Compute differentiable soft curves instead of discrete roc_curve
-    fprs, tprs, thresholds = compute_soft_roc(y_true, y_pred,temp=temp)
-
-    _, acc_fprs, acc_tprs, _, _ = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N, P)
-
-    # 3. Call JAX-compatible VOROS function
-    vor = _geometry_jax.voros_jax(
-        fprs=acc_fprs,
-        tprs=acc_tprs,
-        κ=kappa,
-        α=alpha,
-        P=P,
-        N=N,
-        min_fp_cost_ratio=min_fp_cost_ratio,  
-        max_fp_cost_ratio=max_fp_cost_ratio,
-        n_points=n_points,           
-        thresholds=thresholds  # Must pass your defined array of thresholds here
-    )
-    
+        
     # 2. Compute smooth ROC curve anchored at (0,0)
-    # fprs_raw, tprs_raw = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
-    # fprs_smooth = fprs_raw.at[0].set(0.0)
-    # tprs_smooth = tprs_raw.at[0].set(0.0)
-
-    fprs_smooth, tprs_smooth = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    fprs_raw, tprs_raw, _ = compute_soft_roc(y_true, y_pred,temp=temp)
+    fprs_smooth = fprs_raw.at[0].set(0.0)
+    tprs_smooth = tprs_raw.at[0].set(0.0)
     
     # 3. Vectorized validity mask (returns 1.0 for valid points, 0.0 for invalid points)
     # This preserves array shape (100,) so JAX can trace it without errors!
@@ -245,8 +230,20 @@ def pv_loss_theta_c(
     
     # 5. Compute VOROS over the masked fixed-size arrays
     voros_val = _geometry_jax.voros_jax(
-        acc_fprs, acc_tprs, kappa, alpha, P, N,
-        min_fp_cost_ratio, max_fp_cost_ratio, n_points
+        acc_fprs, 
+        acc_tprs, 
+        kappa, 
+        alpha, 
+        P, 
+        N,
+        min_fp_cost_ratio, 
+        max_fp_cost_ratio, 
+        n_points
     )
 
-    return -vor
+    # total_envelope_area, _ = _geometry_jax.total_region_area(P, N, 0.6, kappa)
+    # env_area_scalar = float(np.asarray(total_envelope_area).item())
+    # voros_val = min(voros_val, env_area_scalar)
+    
+    
+    return -jnp.where(satisfy, voros_val, 0.0)
