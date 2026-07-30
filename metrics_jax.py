@@ -154,7 +154,6 @@ def pv_loss(
     return -jnp.where(satisfy, voros_val, 0.0)
 
 def pvoros_loss_kept_on_valid(
-    params, X, y_true, kappa, alpha, thresholds,min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.03):
     params, X, y_true, kappa, alpha, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.03):
 
     """Differentiable Partial VOROS loss function."""
