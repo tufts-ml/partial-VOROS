@@ -20,7 +20,7 @@ from metrics_jax import pv_loss, pvoros_loss_kept_on_valid
 # Generate 10 reproducible random (theta, c) pairs
 rng = np.random.default_rng(seed=42)
 
-KAPPA_FRAC = 0.3
+KAPPA_FRAC = 0.5
 ALPHA = 0.6
 MIN_FP_COST_RATIO = 1 / 9
 MAX_FP_COST_RATIO = 1 / 6
@@ -101,7 +101,7 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
 
                     thresholds = _theta_c_to_wb_and_thresholds(w_vec, b_val, x_val)
 
-                    old_loss_val = float(pvoros_loss_kept_on_valid(
+                    old_loss_val, satisfy = pvoros_loss_kept_on_valid(
                         params=params_wb,
                         X=x_val,
                         y_true=y_val,
@@ -110,11 +110,11 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
                         thresholds=thresholds,
                         min_fp_cost_ratio=MIN_FP_COST_RATIO,
                         max_fp_cost_ratio=MAX_FP_COST_RATIO
-                    ))
+                    )
 
                     new_loss_val = float(
                         pv_loss(
-                            params_wb, x_val, y_val, P, N, KAPPA, ALPHA, thresholds,
+                            params_wb, x_val, y_val, P, N, KAPPA, ALPHA,
                             MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
                         )
                     )
@@ -163,8 +163,7 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
 
                     loss = float(
                         pv_loss(
-                            params_wb, x_val, y_val, P, N, impossible_kappa, impossible_alpha,
-                            thresholds, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
+                            params_wb, x_val, y_val, P, N, impossible_kappa, impossible_alpha, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
                         )
                     )
 

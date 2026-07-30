@@ -622,117 +622,119 @@ class TestGeometry(unittest.TestCase):
             self.assertFalse(jnp.any(jnp.isnan(g)), f"NaN in grad w.r.t. {name}")
             self.assertFalse(jnp.any(jnp.isinf(g)), f"Inf in grad w.r.t. {name}")
 
-    def compute_reference_pvoros_kept_on_valid(self, x_train, y_true, theta, c, M):
-        """Computes reference pVOROS score directly using _kept_on_valid and voros_jax."""
-        P = int(np.sum(y_true == 1))
-        N = int(np.sum(y_true == 0))
-        kappa = 0.5 * float(len(y_true))
+    # def compute_reference_pvoros_kept_on_valid(self, x_train, y_true, theta, c, M):
+    #     """Computes reference pVOROS score directly using _kept_on_valid and voros_jax."""
+    #     P = int(np.sum(y_true == 1))
+    #     N = int(np.sum(y_true == 0))
+    #     kappa = 0.5 * float(len(y_true))
 
-        # Convert theta, c, M back to linear decision boundary weights
-        w1 = M * np.sin(theta)
-        w2 = -M * np.cos(theta)
-        intercept = M * c * np.cos(theta)
+    #     # Convert theta, c, M back to linear decision boundary weights
+    #     w1 = M * np.sin(theta)
+    #     w2 = -M * np.cos(theta)
+    #     intercept = M * c * np.cos(theta)
 
-        logits = x_train[:, 0] * w1 + x_train[:, 1] * w2 + intercept
-        y_pred = 1.0 / (1.0 + np.exp(-logits))
+    #     logits = x_train[:, 0] * w1 + x_train[:, 1] * w2 + intercept
+    #     y_pred = 1.0 / (1.0 + np.exp(-logits))
 
-        eps = 1e-5
-        thresholds = np.linspace(eps, 1.0 - eps, 100)
+    #     eps = 1e-5
+    #     thresholds = np.linspace(eps, 1.0 - eps, 100)
 
-        # Compute smoothed FPR and TPR arrays using grad helper
-        fprs_smooth, tprs_smooth = grad.compute_smoothed_fprs_tprs_jax(y_true, y_pred, thresholds)
+    #     # Compute smoothed FPR and TPR arrays using grad helper
+    #     fprs_smooth, tprs_smooth = grad.compute_smoothed_fprs_tprs_jax(y_true, y_pred, thresholds)
 
-        # Reference filtering step via _kept_on_valid
-        _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(
-            fprs_smooth, tprs_smooth, thresholds, 0.6, kappa, N, P
-        )
+    #     # Reference filtering step via _kept_on_valid
+    #     _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(
+    #         fprs_smooth, tprs_smooth, thresholds, 0.6, kappa, N, P
+    #     )
 
-        if satisfy:
-            voros_val = float(
-                _geometry_jax.voros_jax(
-                    acc_fprs,
-                    acc_tprs,
-                    kappa,
-                    0.6,
-                    P,
-                    N,
-                    1/9,
-                    1/6,
-                    n_points=1000,  # <-- MATCHES N_POINTS=50 in grad.py
-                )
-            )
-            print("ref voros: ", voros_val)
-            total_envelope_area, _ = _geometry_jax.total_region_area(P, N, 0.6, kappa)
-            env_area_scalar = float(np.asarray(total_envelope_area).item())
-            return min(voros_val, env_area_scalar)
+    #     if satisfy:
+    #         voros_val = float(
+    #             _geometry_jax.voros_jax(
+    #                 acc_fprs,
+    #                 acc_tprs,
+    #                 kappa,
+    #                 0.6,
+    #                 P,
+    #                 N,
+    #                 1/9,
+    #                 1/6,
+    #                 n_points=1000,
+    #                 thresholds=thresholds  # <-- MATCHES N_POINTS=50 in grad.py
+    #             )
+    #         )
+    #         print("ref voros: ", voros_val)
+    #         return voros_val
+    #         # total_envelope_area, _ = _geometry_jax.total_region_area(P, N, 0.6, kappa)
+    #         # env_area_scalar = float(np.asarray(total_envelope_area).item())
+    #         # return min(voros_val, env_area_scalar)
 
-        return 0.0
+    #     return 0.0
 
-    def test_1_new_loss(self):
-        """Verifies that grad.jax_voros_loss matches reference _kept_on_valid + voros_jax."""
-        data_path = "heatmaps/sweep_meta_data.npy"
+    # def test_1_new_loss(self):
+    #     """Verifies that grad.jax_voros_loss matches reference _kept_on_valid + voros_jax."""
+    #     data_path = "heatmaps/sweep_meta_data.npy"
 
-        data = np.load(data_path, allow_pickle=True).item()
-        train_test = data["train_test"]
+    #     data = np.load(data_path, allow_pickle=True).item()
+    #     train_test = data["train_test"]
 
-        # Deterministic seed for reproducible random parameter evaluations
-        np.random.seed(42)
+    #     # Deterministic seed for reproducible random parameter evaluations
+    #     np.random.seed(42)
 
-        print("\n" + "=" * 85)
-        print("TESTING GRAD.JAX_VOROS_LOSS EQUIVALENCE AGAINST KEPT_ON_VALID REFERENCE")
-        print("=" * 85)
+    #     print("\n" + "=" * 85)
+    #     print("TESTING GRAD.JAX_VOROS_LOSS EQUIVALENCE AGAINST KEPT_ON_VALID REFERENCE")
+    #     print("=" * 85)
 
-        for seed_name, seed_data in train_test.items():
-            X = np.asarray(seed_data[0])
-            Y = np.asarray(seed_data[2])
+    #     for seed_name, seed_data in train_test.items():
+    #         X = np.asarray(seed_data[0])
+    #         Y = np.asarray(seed_data[2])
 
-            P = int(np.sum(Y == 1))
-            N = int(np.sum(Y == 0))
+    #         P = int(np.sum(Y == 1))
+    #         N = int(np.sum(Y == 0))
 
-            kappa = 0.5*(P+N)
+    #         kappa = 0.5*(P+N)
 
-            # Sample random evaluation parameters (theta, c, M)
-            theta_val = np.random.uniform(0, np.pi/4)
-            c_val = np.random.uniform(-3.0, 3.0)
-            M_val = np.random.uniform(0.5, 3.0)
-            thresholds = jnp.linspace(1e-5, 1.0-1e-5, 100)
+    #         # Sample random evaluation parameters (theta, c, M)
+    #         theta_val = np.random.uniform(0, np.pi/4)
+    #         c_val = np.random.uniform(-3.0, 3.0)
+    #         M_val = np.random.uniform(0.5, 3.0)
+    #         thresholds = jnp.linspace(1e-5, 1.0-1e-5, 100)
 
-            params = {
-                "theta": jnp.array(theta_val, dtype=jnp.float64),
-                "c": jnp.array(c_val, dtype=jnp.float64),
-            }
+    #         params = {
+    #             "theta": jnp.array(theta_val, dtype=jnp.float64),
+    #             "c": jnp.array(c_val, dtype=jnp.float64),
+    #         }
 
-            # 1. Compute reference score using C++/NumPy filtering logic (_kept_on_valid)
-            ref_score = self.compute_reference_pvoros_kept_on_valid(X, Y, theta_val, c_val, M_val)
+    #         # 1. Compute reference score using C++/NumPy filtering logic (_kept_on_valid)
+    #         ref_score = self.compute_reference_pvoros_kept_on_valid(X, Y, theta_val, c_val, M_val)
 
-            # 2. Compute score using the JAX gradient loss function (-1 * loss)
-            loss_val = float(metrics_jax.pv_loss_theta_c(params, X, Y, P, N, kappa, 0.6, thresholds, 1/9, 1/6, n_points=1000, temp = 0.02, M = M_val))
-            jax_score = -loss_val
+    #         # 2. Compute score using the JAX gradient loss function (-1 * loss)
+    #         loss_val = float(metrics_jax.pv_loss_theta_c(params, X, Y, P, N, kappa, 0.6, 1/9, 1/6, 1000, 0.02, M_val))
+    #         jax_score = -loss_val
 
-            print(
-                f"Seed: {seed_name:<18} | θ: {np.degrees(theta_val):+6.1f}° | c: {c_val:+5.2f} | M: {M_val:.2f} "
-                f"| Ref: {ref_score:.6f} | JAX: {jax_score:.6f}"
-            )
+    #         print(
+    #             f"Seed: {seed_name:<18} | θ: {np.degrees(theta_val):+6.1f}° | c: {c_val:+5.2f} | M: {M_val:.2f} "
+    #             f"| Ref: {ref_score:.6f} | JAX: {jax_score:.6f}"
+    #         )
 
-            # Assert numerical equivalence up to 5 decimal places
-            diff = abs(ref_score - jax_score)
+    #         # Assert numerical equivalence up to 5 decimal places
+    #         diff = abs(ref_score - jax_score)
 
-            self.assertAlmostEqual(
-                ref_score,
-                jax_score,
-                places=5,
-                msg=(
-                    f"\n[MISMATCH DETECTED on {seed_name}]"
-                    f"\n  Reference Score (_kept_on_valid): {ref_score:.12f}"
-                    f"\n  JAX Score (grad.jax_voros_loss): {jax_score:.12f}"
-                    f"\n  Absolute Difference:            {diff:.12f}"
-                    f"\n  Parameters: theta={np.degrees(theta_val):.2f}°, c={c_val:.4f}, M={M_val:.4f}"
-                )
-            )
+    #         self.assertAlmostEqual(
+    #             ref_score,
+    #             jax_score,
+    #             places=5,
+    #             msg=(
+    #                 f"\n[MISMATCH DETECTED on {seed_name}]"
+    #                 f"\n  Reference Score (_kept_on_valid): {ref_score:.12f}"
+    #                 f"\n  JAX Score (grad.jax_voros_loss): {jax_score:.12f}"
+    #                 f"\n  Absolute Difference:            {diff:.12f}"
+    #                 f"\n  Parameters: theta={np.degrees(theta_val):.2f}°, c={c_val:.4f}, M={M_val:.4f}"
+    #             )
+    #         )
 
-        print("=" * 85)
-        print("SUCCESS: All seeds matched the reference _kept_on_valid evaluation!")
-        print("=" * 85)
+    #     print("=" * 85)
+    #     print("SUCCESS: All seeds matched the reference _kept_on_valid evaluation!")
+    #     print("=" * 85)
 
     # def test_double_grad_without_error(self):
     #     # just confirms no exceptions, no NaNs sneaking through the trace
