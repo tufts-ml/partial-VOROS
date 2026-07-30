@@ -14,11 +14,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from metrics_jax import pv_loss, pvoros_loss_kept_on_valid
-<<<<<<< HEAD
-=======
 
 
->>>>>>> 83f7bd1 (testjax loss)
 
 # Generate 10 reproducible random (theta, c) pairs
 rng = np.random.default_rng(seed=42)
@@ -115,25 +112,11 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
                         max_fp_cost_ratio=MAX_FP_COST_RATIO
                     ))
 
-<<<<<<< HEAD
-                    new_loss_val, satisfy = pv_loss(
-                        params_wb, 
-                        x_val, 
-                        y_val, 
-                        P, 
-                        N, 
-                        KAPPA, 
-                        ALPHA, 
-                        thresholds,
-                        MIN_FP_COST_RATIO, 
-                        MAX_FP_COST_RATIO
-=======
                     new_loss_val = float(
                         pv_loss(
                             params_wb, x_val, y_val, P, N, KAPPA, ALPHA, thresholds,
                             MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
                         )
->>>>>>> 83f7bd1 (testjax loss)
                     )
 
                     new_loss_val = float(new_loss_val)
@@ -178,25 +161,11 @@ class TestJaxLossVsNonJaxVoros(unittest.TestCase):
                     impossible_alpha = 0.9999
                     impossible_kappa = -1.0
 
-<<<<<<< HEAD
-                    loss, _ = pv_loss(
-                        params_wb, 
-                        x_val, 
-                        y_val, 
-                        P, 
-                        N, 
-                        impossible_kappa, 
-                        impossible_alpha,
-                        thresholds, 
-                        MIN_FP_COST_RATIO, 
-                        MAX_FP_COST_RATIO
-=======
                     loss = float(
                         pv_loss(
                             params_wb, x_val, y_val, P, N, impossible_kappa, impossible_alpha,
                             thresholds, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO, N_POINTS
                         )
->>>>>>> 83f7bd1 (testjax loss)
                     )
 
                     loss = float(loss)

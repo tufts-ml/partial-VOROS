@@ -154,9 +154,8 @@ def pv_loss(
     return -jnp.where(satisfy, voros_val, 0.0)
 
 def pvoros_loss_kept_on_valid(
-<<<<<<< HEAD
-=======
     params, X, y_true, kappa, alpha, thresholds,min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.03):
+    params, X, y_true, kappa, alpha, min_fp_cost_ratio, max_fp_cost_ratio, n_points=1000, temp=0.03):
 
     """Differentiable Partial VOROS loss function."""
     w = params['w']
@@ -165,7 +164,7 @@ def pvoros_loss_kept_on_valid(
     y_pred = jax.nn.sigmoid(logits)
     P = jnp.sum(y_true == 1)
     N = jnp.sum(y_true == 0)
-    fprs, tprs = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
+    fprs, tprs, thresholds = compute_soft_roc(y_true, y_pred, temp=temp)
 
     _, acc_fprs, acc_tprs, _, satisfy = _geometry_jax._kept_on_valid(fprs, tprs, thresholds, alpha, kappa, N, P)
 
@@ -187,7 +186,6 @@ def pvoros_loss_kept_on_valid(
 
 
 def pv_loss_theta_c(
->>>>>>> 83f7bd1 (testjax loss)
     params, 
     X, 
     y_true, 
@@ -204,7 +202,6 @@ def pv_loss_theta_c(
     # 1. Forward Pass
     logits = jnp.dot(X, w) + b
     y_pred = jax.nn.sigmoid(logits)
-<<<<<<< HEAD
 
     P = jnp.sum(y_true == 1)
     N = jnp.sum(y_true == 0)
@@ -226,7 +223,7 @@ def pv_loss_theta_c(
         max_fp_cost_ratio=max_fp_cost_ratio,
         n_points=n_points,           
         thresholds=thresholds  # Must pass your defined array of thresholds here
-=======
+    )
     
     # 2. Compute smooth ROC curve anchored at (0,0)
     # fprs_raw, tprs_raw = compute_soft_roc(y_true, y_pred, thresholds, temp=temp)
@@ -251,7 +248,6 @@ def pv_loss_theta_c(
     voros_val = _geometry_jax.voros_jax(
         acc_fprs, acc_tprs, kappa, alpha, P, N,
         min_fp_cost_ratio, max_fp_cost_ratio, n_points
->>>>>>> 83f7bd1 (testjax loss)
     )
 
     return -vor
