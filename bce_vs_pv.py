@@ -22,12 +22,12 @@ import optax
 
 from metrics_jax import pv_loss_theta_c, pvoros_score
 
-# ---- Shared constants (reused from the earlier test file) ----
+# ---- Shared constants ----
 KAPPA_FRAC = 0.5
 ALPHA = 0.6
 MIN_FP_COST_RATIO = 1 / 9
 MAX_FP_COST_RATIO = 1 / 6
-N_POINTS = 1000
+N_POINTS = 100  # 100 points is fast for training steps while staying accurate
 
 LEARNING_RATE = 0.01
 N_EPOCHS = 100
@@ -127,56 +127,12 @@ def make_pvoros_step(
     return step
 
 
-def train_bce(
-    X_train, 
-    y_train, 
-    d, 
-    key, 
-    n_epochs=N_EPOCHS, 
-    lr=LEARNING_RATE,
-    ):
-    params = init_params(d, key)
-    optimizer = optax.adam(lr)
+def run_training_loop(step_fn, params, optimizer, X_train, y_train, n_epochs=N_EPOCHS):
+    """Reuses pre-compiled step_fn across initializations without re-JITting."""
     opt_state = optimizer.init(params)
-    step = make_bce_step(optimizer)
-
     loss = 0.0
-    for epoch in range(n_epochs):
-        params, opt_state, loss = step(params, opt_state, X_train, y_train)
-
-    return params, float(loss)
-
-
-def train_pvoros(
-    X_train, 
-    y_train, 
-    d, 
-    key, 
-    P, 
-    N, 
-    kappa,
-    n_epochs=N_EPOCHS, 
-    lr=LEARNING_RATE,
-    ):
-    params = init_params_theta_c(key)
-    optimizer = optax.adam(lr)
-    opt_state = optimizer.init(params)
-
-    step = make_pvoros_step(
-        optimizer, 
-        P, 
-        N, 
-        kappa, 
-        ALPHA,
-        MIN_FP_COST_RATIO, 
-        MAX_FP_COST_RATIO, 
-        N_POINTS,
-    )
-
-    loss = 0.0
-    for epoch in range(n_epochs):
-        params, opt_state, loss = step(params, opt_state, X_train, y_train)
-
+    for _ in range(n_epochs):
+        params, opt_state, loss = step_fn(params, opt_state, X_train, y_train)
     return params, float(loss)
 
 
@@ -223,7 +179,23 @@ def main():
         N_val = float(jnp.sum(y_val == 0.0))
         KAPPA_val = KAPPA_FRAC * (P_val + N_val)
 
-        print(f"\n[{seed_filename}] Training best of {N_RESTARTS} initializations...")
+        print(f"\n[{seed_filename}] Compiling step functions & running {N_RESTARTS} restarts...")
+
+        # --- Instantiate Optimizers & Compile Step Functions ONCE per Dataset ---
+        bce_optimizer = optax.adam(LEARNING_RATE)
+        pvoros_optimizer = optax.adam(LEARNING_RATE)
+
+        bce_step = make_bce_step(bce_optimizer)
+        pvoros_step = make_pvoros_step(
+            pvoros_optimizer, 
+            P_train, 
+            N_train, 
+            KAPPA_train, 
+            ALPHA,
+            MIN_FP_COST_RATIO, 
+            MAX_FP_COST_RATIO, 
+            N_POINTS,
+        )
 
         best_bce_params = None
         best_bce_loss = float('inf')
@@ -231,24 +203,25 @@ def main():
         best_pvoros_params = None
         best_pvoros_loss = float('inf')
  
-        # Loop over N restarts for both models
+        # --- Fast Restarts Loop (Pre-compiled functions execute in milliseconds) ---
         for i in range(N_RESTARTS):
             key, bce_key, pvoros_key = jax.random.split(key, 3)
 
             # 1. Train BCE 
-            bce_params, bce_loss_val = train_bce(X_train, y_train, d, bce_key)
+            bce_init = init_params(d, bce_key)
+            bce_params, bce_loss_val = run_training_loop(bce_step, bce_init, bce_optimizer, X_train, y_train)
             if bce_loss_val < best_bce_loss:
                 best_bce_loss = bce_loss_val
                 best_bce_params = bce_params
 
-            # 2. Train PVOROS (Remember: lower loss == higher VOROS score)
-            pvoros_params, pvoros_loss_val = train_pvoros(
-                X_train, y_train, d, pvoros_key, P_train, N_train, KAPPA_train
-            )
+            # 2. Train PVOROS 
+            pvoros_init = init_params_theta_c(pvoros_key)
+            pvoros_params, pvoros_loss_val = run_training_loop(pvoros_step, pvoros_init, pvoros_optimizer, X_train, y_train)
             if pvoros_loss_val < best_pvoros_loss:
                 best_pvoros_loss = pvoros_loss_val
                 best_pvoros_params = pvoros_params
-                
+
+            print(f"Initialization {i+1} - best BCE: {bce_loss_val:.3f}, best PV: {pvoros_loss_val:.3f}")
         print(f"[{seed_filename}] -> Best BCE Train Loss:    {best_bce_loss:.6f}")
         print(f"[{seed_filename}] -> Best PVOROS Train Loss: {best_pvoros_loss:.6f}")
  
