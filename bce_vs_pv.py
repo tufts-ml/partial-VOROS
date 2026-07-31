@@ -7,6 +7,12 @@ For each seed dataset:
   4. Train a third logistic regression model with the PVOROS loss (10 restarts, pick best PV loss).
   5. Evaluate all best-trained models' PVOROS score on the held-out validation split.
   6. Print a summary table comparing the three methods.
+  2. Train a logistic regression model with plain BCE loss (10 restarts, pick best final BCE).
+  3. Train a logistic regression model with BCE loss, searching the trajectory for the highest 
+     training pVOROS score (evaluated every 10 epochs).
+  4. Train a third logistic regression model with the PVOROS loss (10 restarts, pick best PV loss).
+  5. Evaluate all best-trained models' PVOROS score on the held-out validation split.
+  6. Print a summary table comparing the three methods.
 """
 
 import os
@@ -33,6 +39,7 @@ N_POINTS = 100  # 100 points is fast for training steps while staying accurate
 
 LEARNING_RATE = 0.01
 N_EPOCHS = 100
+EVAL_EVERY_N_EPOCHS = 10  # Track pVOROS score every 10 epochs during BCE trajectory search
 EVAL_EVERY_N_EPOCHS = 10  # Track pVOROS score every 10 epochs during BCE trajectory search
 VAL_FRACTION = 0.2
 N_RESTARTS = 10  # Number of random initializations
@@ -121,7 +128,7 @@ def make_pvoros_step(
         loss = pv_loss_theta_c(
             params, X, y, P, N, kappa, alpha, 
             min_fp_cost_ratio, max_fp_cost_ratio, n_points,
-            temp=0.02
+            temp=0.03
         )
         return loss
 
@@ -136,11 +143,35 @@ def make_pvoros_step(
 
 def run_training_loop(step_fn, params, optimizer, X_train, y_train, n_epochs=N_EPOCHS):
     """Standard optimization loop (e.g. for plain BCE or direct PVOROS loss)."""
+    """Standard optimization loop (e.g. for plain BCE or direct PVOROS loss)."""
     opt_state = optimizer.init(params)
     loss = 0.0
     for _ in range(n_epochs):
         params, opt_state, loss = step_fn(params, opt_state, X_train, y_train)
     return params, float(loss)
+
+
+def train_bce_trajectory_search(
+    step_fn, params, optimizer, X_train, y_train, P_train, N_train, KAPPA_train, 
+    n_epochs=N_EPOCHS, eval_every=EVAL_EVERY_N_EPOCHS
+):
+    """Trains via BCE, but searches the optimization trajectory every `eval_every` epochs for the highest training pVOROS score."""
+    opt_state = optimizer.init(params)
+    
+    best_trajectory_params = params
+    best_trajectory_score = -float('inf')
+    
+    for epoch in range(n_epochs):
+        params, opt_state, _ = step_fn(params, opt_state, X_train, y_train)
+        
+        # Evaluate pVOROS score every N epochs (and on final epoch)
+        if (epoch % eval_every == 0) or (epoch == n_epochs - 1):
+            current_pv_score = eval_pvoros_score(params, X_train, y_train, P_train, N_train, KAPPA_train)
+            if current_pv_score > best_trajectory_score:
+                best_trajectory_score = current_pv_score
+                best_trajectory_params = params
+            
+    return best_trajectory_params, best_trajectory_score
 
 
 def train_bce_trajectory_search(
@@ -232,13 +263,18 @@ def main():
         best_bce_traj_params = None
         best_bce_traj_score = -float('inf')
 
+        best_bce_traj_params = None
+        best_bce_traj_score = -float('inf')
+
         best_pvoros_params = None
         best_pvoros_loss = float('inf')
  
         # --- Fast Restarts Loop ---
+        # --- Fast Restarts Loop ---
         for i in range(N_RESTARTS):
             key, bce_key, pvoros_key = jax.random.split(key, 3)
 
+            # 1. Plain BCE (Evaluates final loss)
             # 1. Plain BCE (Evaluates final loss)
             bce_init = init_params(d, bce_key)
             bce_params, bce_loss_val = run_training_loop(bce_step, bce_init, bce_optimizer, X_train, y_train)
@@ -246,6 +282,15 @@ def main():
                 best_bce_loss = bce_loss_val
                 best_bce_params = bce_params
 
+            # 2. BCE Trajectory Search (Evaluates training pVOROS score every 10 epochs)
+            bce_traj_params, traj_pv_score = train_bce_trajectory_search(
+                bce_step, bce_init, bce_optimizer, X_train, y_train, P_train, N_train, KAPPA_train
+            )
+            if traj_pv_score > best_bce_traj_score:
+                best_bce_traj_score = traj_pv_score
+                best_bce_traj_params = bce_traj_params
+
+            # 3. Direct PVOROS Loss
             # 2. BCE Trajectory Search (Evaluates training pVOROS score every 10 epochs)
             bce_traj_params, traj_pv_score = train_bce_trajectory_search(
                 bce_step, bce_init, bce_optimizer, X_train, y_train, P_train, N_train, KAPPA_train
@@ -266,10 +311,19 @@ def main():
         print(f"[{seed_filename}] -> Best BCE Train Loss:       {best_bce_loss:.6f}")
         print(f"[{seed_filename}] -> Best BCE Traj PV Score:   {best_bce_traj_score:.6f}")
         print(f"[{seed_filename}] -> Best PVOROS Train Loss:    {best_pvoros_loss:.6f}")
+            print(f"Initialization {i+1:2d} | Best BCE Loss: {bce_loss_val:.3f} | BCE Traj Score: {traj_pv_score:.3f} | PV Loss: {pvoros_loss_val:.3f}")
+
+        print(f"[{seed_filename}] -> Best BCE Train Loss:       {best_bce_loss:.6f}")
+        print(f"[{seed_filename}] -> Best BCE Traj PV Score:   {best_bce_traj_score:.6f}")
+        print(f"[{seed_filename}] -> Best PVOROS Train Loss:    {best_pvoros_loss:.6f}")
  
+        # --- Evaluate best parameters from all 3 methods on Validation Set ---
         # --- Evaluate best parameters from all 3 methods on Validation Set ---
         bce_val_score = eval_pvoros_score(
             best_bce_params, X_val, y_val, P_val, N_val, KAPPA_val
+        )
+        bce_traj_val_score = eval_pvoros_score(
+            best_bce_traj_params, X_val, y_val, P_val, N_val, KAPPA_val
         )
         bce_traj_val_score = eval_pvoros_score(
             best_bce_traj_params, X_val, y_val, P_val, N_val, KAPPA_val
@@ -282,6 +336,7 @@ def main():
             "seed": seed_filename,
             "bce_val_pvoros": bce_val_score,
             "bce_traj_val_pvoros": bce_traj_val_score,
+            "bce_traj_val_pvoros": bce_traj_val_score,
             "pvoros_val_pvoros": pvoros_val_score,
         })
  
@@ -292,10 +347,14 @@ def main():
 
 def print_results_table(results):
     header = f"{'seed':<18} {'BCE val PV':>14} {'BCE-Traj val PV':>18} {'PVOROS-loss val PV':>20}"
+    header = f"{'seed':<18} {'BCE val PV':>14} {'BCE-Traj val PV':>18} {'PVOROS-loss val PV':>20}"
     print(header)
     print("-" * len(header))
     for r in results:
         print(
+            f"{r['seed']:<18} {r['bce_val_pvoros']:>14.4f}"
+            f"{r['bce_traj_val_pvoros']:>18.4f}"
+            f"{r['pvoros_val_pvoros']:>20.4f}"
             f"{r['seed']:<18} {r['bce_val_pvoros']:>14.4f}"
             f"{r['bce_traj_val_pvoros']:>18.4f}"
             f"{r['pvoros_val_pvoros']:>20.4f}"
