@@ -3,13 +3,9 @@ contains relevant gradient functions
 
 '''
 
-
-import sys
-import os
 import numpy as np
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import _geometry_jax
 
 # Enable 64-bit precision in JAX

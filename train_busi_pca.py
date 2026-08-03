@@ -213,8 +213,8 @@ def main():
         )
 
         results_summary[name] = {
-            "static_voros": score_static * 100,
-            "true_voros": float(score_true) * 100,
+            "pv_fixed_thresh": score_static * 100,
+            "jax_pv": float(score_true) * 100,
         }
 
         # Cache final model weights per dimension
@@ -226,10 +226,10 @@ def main():
     print("\n" + "=" * 65)
     print("            FINAL DIMENSION COMPARISON SUMMARY")
     print("=" * 65)
-    print(f"{'Representation':<25} | {'Static VOROS (%)':<18} | {'True Empirical VOROS (%)':<22}")
+    print(f"{'Representation':<25} | {'PV fixed thresh (%)':<18} | {'Jax PV (%)':<22}")
     print("-" * 65)
     for name, metrics in results_summary.items():
-        print(f"{name:<25} | {metrics['static_voros']:18.2f} | {metrics['true_voros']:22.2f}")
+        print(f"{name:<25} | {metrics['pv_fixed_thresh']:18.2f} | {metrics['jax_pv']:22.2f}")
     print("=" * 65)
 
 
