@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import auc
 from test_jax_loss import _theta_c_to_wb
 from metrics_jax import compute_soft_roc
-import grad
 
 # Enable 64-bit precision in JAX
 jax.config.update("jax_enable_x64", True)
@@ -25,13 +24,17 @@ MIN_FP_COST_RATIO = 1/9
 MAX_FP_COST_RATIO = 1/6
 N_POINTS = 50
 SIGMOID_K = 50
-TEMP = 0.03
+TEMP = 0.02
 
 def compute_decision_scores(X, theta, c):
     """Computes continuous decision scores w · x + b."""
     w, b = _theta_c_to_wb(theta, c)
     raw_scores = jnp.dot(X, w) + b
     return jax.nn.sigmoid(raw_scores)
+
+def wrap_to_pi(theta):
+    """Wraps any angle (in radians) strictly into [-pi, pi]."""
+    return (theta + np.pi) % (2 * np.pi) - np.pi
 
 if __name__ == "__main__":
     NUM_TRIALS = 10
@@ -148,7 +151,7 @@ if __name__ == "__main__":
                 continue
             
             t_raw = trial_data['param_history'][:, 0]
-            t_norm = np.array([grad.wrap_to_pi(t) for t in t_raw])
+            t_norm = np.array([wrap_to_pi(t) for t in t_raw])
             t_deg = np.degrees(t_norm)
             c_track = trial_data['param_history'][:, 1]
 

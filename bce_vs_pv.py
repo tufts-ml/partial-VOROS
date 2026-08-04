@@ -1,41 +1,38 @@
 """
 For each seed dataset:
   1. Load data_dict['data']['x'] / ['y'] and split into train/val (80/20).
-  2. Train a logistic regression model with plain BCE loss.
-  3. Train a second logistic regression model with the PVOROS loss (pv_loss).
-  4. Evaluate both trained models' PVOROS score on the held-out validation split.
+  2. Train a logistic regression model with plain BCE loss (10 restarts, pick best).
+  3. Train a second logistic regression model with the PVOROS loss (10 restarts, pick best).
+  4. Evaluate both best-trained models' PVOROS score on the held-out validation split.
   5. Print a summary table comparing the two.
-
-Assumptions (adjust if they don't match your setup):
-  - Train/val split is 80/20, done per-seed with a seed-derived RNG so it's
-    reproducible across runs but distinct per seed file.
-  - PVOROS training uses a fixed threshold grid (not derived from data),
-    matching the earlier jax_voros_loss convention -- this keeps array
-    shapes static for jit and avoids the thresholds-from-labels bug we
-    hit before.
-  - ALPHA / KAPPA_FRAC / MIN_FP_COST_RATIO / MAX_FP_COST_RATIO / N_POINTS
-    reused from the test constants.
-  - Optimizer: optax.adam, fixed learning rate and epoch count -- tune as
-    needed, these aren't derived from anything data-specific.
 """
+
+import os
+# Force deterministic CPU execution before JAX loads
+os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+
+import hashlib
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 
-from metrics_jax import pv_loss
-from grad import jax_voros_loss
+from metrics_jax import pv_loss_theta_c, pvoros_score
 
-# ---- Shared constants (reused from the earlier test file) ----
-KAPPA_FRAC = 0.3
+# ---- Shared constants ----
+KAPPA_FRAC = 0.5
 ALPHA = 0.6
 MIN_FP_COST_RATIO = 1 / 9
 MAX_FP_COST_RATIO = 1 / 6
-N_POINTS = 1000
+N_POINTS = 100  # 100 points is fast for training steps while staying accurate
 
 LEARNING_RATE = 0.01
 N_EPOCHS = 100
 VAL_FRACTION = 0.2
+N_RESTARTS = 10  # Number of random initializations
 
 SEED_FILENAMES = [
     "seed_101_201.npy",
@@ -55,8 +52,9 @@ def load_seed_data(seed_filename):
 
 
 def train_val_split(x, y, seed_filename, val_fraction=VAL_FRACTION):
-    """80/20 split, reproducible per-seed via a filename-derived RNG."""
-    rng = np.random.default_rng(seed=abs(hash(seed_filename)) % (2**32))
+    """100% deterministic 80/20 split across Python sessions using MD5 hashing."""
+    seed_int = int(hashlib.md5(seed_filename.encode('utf-8')).hexdigest(), 16) % (2**32)
+    rng = np.random.default_rng(seed=seed_int)
     n = x.shape[0]
     idx = rng.permutation(n)
     n_val = int(round(n * val_fraction))
@@ -117,18 +115,7 @@ def make_pvoros_step(
     max_fp_cost_ratio, 
     n_points):
     def loss_fn(params, X, y):
-        loss = jax_voros_loss(
-            params, 
-            X, 
-            y, 
-            P, 
-            N,
-            # kappa, 
-            # alpha,
-            # min_fp_cost_ratio, 
-            # max_fp_cost_ratio, 
-            # n_points,
-        )
+        loss = pv_loss_theta_c(params, X, y, P, N, kappa, alpha, min_fp_cost_ratio, max_fp_cost_ratio, n_points)
         return loss
 
     @jax.jit
@@ -140,94 +127,37 @@ def make_pvoros_step(
     return step
 
 
-def train_bce(
-    X_train, 
-    y_train, 
-    d, 
-    key, 
-    n_epochs=N_EPOCHS, 
-    lr=LEARNING_RATE,
-    seed_filename="", 
-    print_every=10
-    ):
-    params = init_params(d, key)
-    optimizer = optax.adam(lr)
+def run_training_loop(step_fn, params, optimizer, X_train, y_train, n_epochs=N_EPOCHS):
+    """Reuses pre-compiled step_fn across initializations without re-JITting."""
     opt_state = optimizer.init(params)
-    step = make_bce_step(optimizer)
-
-    for epoch in range(n_epochs):
-        params, opt_state, loss = step(params, opt_state, X_train, y_train)
-        if epoch % print_every == 0 or epoch == n_epochs - 1:
-            print(f"[{seed_filename}] BCE    epoch {epoch:4d}/{n_epochs}: loss={float(loss):.6f}")
-
-    return params
-
-
-def train_pvoros(
-    X_train, 
-    y_train, 
-    d, 
-    key, 
-    P, 
-    N, 
-    kappa,
-    n_epochs=N_EPOCHS, 
-    lr=LEARNING_RATE,
-    seed_filename="", 
-    print_every=10
-    ):
-    params = init_params_theta_c(key)
-    optimizer = optax.adam(lr)
-    opt_state = optimizer.init(params)
-
-    step = make_pvoros_step(
-        optimizer, 
-        P, 
-        N, 
-        kappa, 
-        ALPHA,
-        MIN_FP_COST_RATIO, 
-        MAX_FP_COST_RATIO, 
-        N_POINTS,
-    )
-
-    for epoch in range(n_epochs):
-        params, opt_state, loss = step(params, opt_state, X_train, y_train)
-        if epoch % print_every == 0 or epoch == n_epochs - 1:
-            print(
-                f"[{seed_filename}] PVOROS epoch {epoch:4d}/{n_epochs}: loss={float(loss):.6f}"
-            )
-
-    return params
+    loss = 0.0
+    for _ in range(n_epochs):
+        params, opt_state, loss = step_fn(params, opt_state, X_train, y_train)
+    return params, float(loss)
 
 
 def eval_pvoros_score(params, X_val, y_val, P, N, kappa):
-    """Return the (positive) PVOROS score on validation data. -pv_loss's
-    aux `satisfy` tells us whether any point met the constraints; if not,
-    report the score as 0.0 to match pv_loss's own convention."""
-    loss = pv_loss(
-        params, 
-        X_val, 
-        y_val, 
-        P, 
-        N, 
-        kappa, 
-        ALPHA,
-        MIN_FP_COST_RATIO, 
-        MAX_FP_COST_RATIO, 
-        N_POINTS,
-    )
-    score = float(-loss)
-    return score
+    """Return the (positive) PVOROS score on validation data."""
+    w = params['w']
+    b = params['b']
+
+    logits = jnp.dot(X_val, w) + b
+    y_pred = jax.nn.sigmoid(logits)
+
+    score = pvoros_score(y_val, y_pred, ALPHA, kappa, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO)
+    return float(score)
 
 
-def eval_pvoros_score_theta_c(params, X_val, y_val, P, N):
-    loss = jax_voros_loss(params, X_val, y_val, P, N)
-    return float(-loss)  # no satisfy to unpack -- jax_voros_loss doesn't return it
+def eval_pvoros_score_theta_c(params, X_val, y_val, P, N, kappa):
+    w_vec, b_val = theta_c_to_wb(params['theta'], params['c'])
+    wb_params = {"w": w_vec, "b": b_val}
+    return eval_pvoros_score(wb_params, X_val, y_val, P, N, kappa)
 
 
 def main():
-    key = jax.random.PRNGKey(0)
+    # Initialize global numpy rng and jax PRNGKey
+    np.random.seed(42)
+    key = jax.random.PRNGKey(42)
     results = []
  
     for seed_filename in SEED_FILENAMES:
@@ -248,21 +178,59 @@ def main():
         P_val = float(jnp.sum(y_val == 1.0))
         N_val = float(jnp.sum(y_val == 0.0))
         KAPPA_val = KAPPA_FRAC * (P_val + N_val)
-        # val_thresholds = jnp.linspace(1e-5, 1.0 - 1e-5, 100)
- 
-        key, bce_key, pvoros_key = jax.random.split(key, 3)
- 
-        bce_params = train_bce(X_train, y_train, d, bce_key, seed_filename=seed_filename)
-        pvoros_params = train_pvoros(
-            X_train, y_train, d, pvoros_key, P_train, N_train, KAPPA_train,
-            seed_filename=seed_filename,
+
+        print(f"\n[{seed_filename}] Compiling step functions & running {N_RESTARTS} restarts...")
+
+        # --- Instantiate Optimizers & Compile Step Functions ONCE per Dataset ---
+        bce_optimizer = optax.adam(LEARNING_RATE)
+        pvoros_optimizer = optax.adam(LEARNING_RATE)
+
+        bce_step = make_bce_step(bce_optimizer)
+        pvoros_step = make_pvoros_step(
+            pvoros_optimizer, 
+            P_train, 
+            N_train, 
+            KAPPA_train, 
+            ALPHA,
+            MIN_FP_COST_RATIO, 
+            MAX_FP_COST_RATIO, 
+            N_POINTS,
         )
+
+        best_bce_params = None
+        best_bce_loss = float('inf')
+
+        best_pvoros_params = None
+        best_pvoros_loss = float('inf')
  
+        # --- Fast Restarts Loop (Pre-compiled functions execute in milliseconds) ---
+        for i in range(N_RESTARTS):
+            key, bce_key, pvoros_key = jax.random.split(key, 3)
+
+            # 1. Train BCE 
+            bce_init = init_params(d, bce_key)
+            bce_params, bce_loss_val = run_training_loop(bce_step, bce_init, bce_optimizer, X_train, y_train)
+            if bce_loss_val < best_bce_loss:
+                best_bce_loss = bce_loss_val
+                best_bce_params = bce_params
+
+            # 2. Train PVOROS 
+            pvoros_init = init_params_theta_c(pvoros_key)
+            pvoros_params, pvoros_loss_val = run_training_loop(pvoros_step, pvoros_init, pvoros_optimizer, X_train, y_train)
+            if pvoros_loss_val < best_pvoros_loss:
+                best_pvoros_loss = pvoros_loss_val
+                best_pvoros_params = pvoros_params
+
+            print(f"Initialization {i+1} - best BCE: {bce_loss_val:.3f}, best PV: {pvoros_loss_val:.3f}")
+        print(f"[{seed_filename}] -> Best BCE Train Loss:    {best_bce_loss:.6f}")
+        print(f"[{seed_filename}] -> Best PVOROS Train Loss: {best_pvoros_loss:.6f}")
+ 
+        # Evaluate best-performing parameters on the held-out validation set
         bce_val_score = eval_pvoros_score(
-            bce_params, X_val, y_val, P_val, N_val, KAPPA_val
+            best_bce_params, X_val, y_val, P_val, N_val, KAPPA_val
         )
         pvoros_val_score = eval_pvoros_score_theta_c(
-            pvoros_params, X_val, y_val, P_val, N_val
+            best_pvoros_params, X_val, y_val, P_val, N_val, KAPPA_val
         )
  
         results.append({
@@ -271,6 +239,7 @@ def main():
             "pvoros_val_pvoros": pvoros_val_score,
         })
  
+    print("\n")
     print_results_table(results)
     return results
 

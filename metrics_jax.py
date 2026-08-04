@@ -8,23 +8,6 @@ def pvoros_score(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_fp_co
                  n_points=1000):
     """Partial VOROS score with precision and capacity constraints.
 
-    Parameters
-    ----------
-    y_true : array-like of shape (n,)
-        Binary labels.
-    y_pred : array-like of shape (n,)
-        Predicted probabilities.
-    alpha : float in (0, 1)
-        Minimum precision (PPV) constraint.
-    kappa_frac : float in (0, 1]
-        Maximum predicted positive fraction (capacity = kappa_frac * len(y_true)).
-    min_fp_cost_ratio : float
-        Minimum C0/C1 cost ratio.
-    max_fp_cost_ratio : float
-        Maximum C0/C1 cost ratio.
-    n_points : int
-        Number of cost ratio grid points for integration.
-
     Returns
     -------
     float : pVOROS score in [0, 1]
@@ -36,21 +19,41 @@ def pvoros_score(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_fp_co
     n = len(y_true)
     kappa = kappa_frac * float(n)
 
+    if P == 0 or N == 0:
+        return 0.0
+
     fprs, tprs, _ = roc_curve(y_true, y_pred)
     
-    # Cast to JAX arrays immediately
-    j_fprs = jnp.asarray(fprs, dtype=jnp.float32)
-    j_tprs = jnp.asarray(tprs, dtype=jnp.float32)
+    # Cast to JAX arrays
+    j_fprs = jnp.asarray(fprs, dtype=jnp.float64)
+    j_tprs = jnp.asarray(tprs, dtype=jnp.float64)
     
-    # Fully vectorized mask creation on accelerator memory (No CPU loops!)
-    upper_bound = (kappa - N * j_fprs) / P
-    lower_bound = (alpha * N * j_fprs) / ((1 - alpha) * P)
-    feasible = (j_tprs <= upper_bound) & (j_tprs >= lower_bound)
+    # Compute feasibility bounds with numerical tolerance guardrails
+    upper_bound = (kappa - N * j_fprs) / float(P)
+    lower_bound = (alpha * N * j_fprs) / float((1.0 - alpha) * P)
+    feasible = (j_tprs <= upper_bound + 1e-9) & (j_tprs >= lower_bound - 1e-9)
 
-    return float(_geometry_jax.voros_jax(
-        j_fprs, j_tprs, feasible, kappa, alpha, P, N,
-        min_fp_cost_ratio, max_fp_cost_ratio, n_points=n_points,
-    ))
+    # If no ROC points satisfy constraints, return 0.0 score immediately
+    if not jnp.any(feasible):
+        return 0.0
+
+    # Filter ROC points to only keep feasible operating points
+    acc_fprs = j_fprs[feasible]
+    acc_tprs = j_tprs[feasible]
+
+    voros_val = _geometry_jax.voros_jax(
+        acc_fprs, 
+        acc_tprs, 
+        kappa, 
+        alpha, 
+        P, 
+        N,
+        min_fp_cost_ratio, 
+        max_fp_cost_ratio, 
+        n_points
+    )
+
+    return float(voros_val)
 
 def prediction_thresholds_fixed():
     """Fixed thresholds for differentiable evaluation."""
