@@ -123,6 +123,11 @@ def make_pvoros_step(
             min_fp_cost_ratio, max_fp_cost_ratio, n_points,
             temp=0.02
         )
+        loss = pv_loss_theta_c(
+            params, X, y, P, N, kappa, alpha, 
+            min_fp_cost_ratio, max_fp_cost_ratio, n_points,
+            temp=0.02
+        )
         return loss
 
     @jax.jit

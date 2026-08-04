@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from sklearn.metrics import auc
 from test_jax_loss import _theta_c_to_wb
-from metrics_jax import compute_soft_roc
+from metrics_jax import soft_roc_fixed_thresholds as compute_soft_roc
 
 # Enable 64-bit precision in JAX
 jax.config.update("jax_enable_x64", True)
