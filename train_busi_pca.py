@@ -53,16 +53,14 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
     P = jnp.sum(y == 1.0)
     N = jnp.sum(y == 0.0)
     kappa = 0.5 * (P + N)
-    alpha = 0.3
+    alpha = 0.15
     min_fp_cost_ratio = 1 / 9
     max_fp_cost_ratio = 1 / 6
-    n_points = 1000
-    temp = 0.02
 
     def loss_fn(p):
         return pv_loss_fixed_thresh(
             p, x, y, P, N, kappa, alpha,
-            min_fp_cost_ratio, max_fp_cost_ratio, n_points, temp
+            min_fp_cost_ratio, max_fp_cost_ratio
         )
 
     @jax.jit
@@ -79,8 +77,8 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
         best_params = params
         best_loss = float("inf")
 
-        for epoch in range(epochs):
-            params, opt_state, loss, grads = train_step(params, opt_state)
+        for _ in range(epochs):
+            params, opt_state, loss, _ = train_step(params, opt_state)
             curr_loss = float(loss)
 
             if curr_loss < best_loss and not np.isnan(curr_loss):
@@ -169,7 +167,7 @@ def main():
         P_val = jnp.sum(y_val_jax == 1.0)
         N_val = jnp.sum(y_val_jax == 0.0)
         kappa_val = 0.5 * (P_val + N_val)
-        alpha = 0.3
+        alpha = 0.15
         min_fp_cost_ratio = 1 / 9
         max_fp_cost_ratio = 1 / 6
         n_points = 1000
@@ -195,7 +193,7 @@ def main():
             alpha,
             min_fp_cost_ratio, 
             max_fp_cost_ratio, 
-            n_points)
+            n_points=n_points)
         pv_fixed_thresh = -float(pv_fixed_thresh)
 
         # Empirical ROC VOROS Score
