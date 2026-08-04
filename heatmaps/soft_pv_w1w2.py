@@ -15,8 +15,8 @@ alpha = 0.6
 kappa_frac = 0.5
 min_ratio = 1/9
 max_ratio = 1/6
-GRID_N_POINTS = 50 
-SIGMOID_K = 10
+GRID_N_POINTS = 1000 
+SIGMOID_K = 50
 
 def sigmoid_approximation(p, tau, k):
     return (1 + np.exp(-k * (p - tau))) ** -1

@@ -75,7 +75,8 @@ def compute_soft_roc(y_true, y_pred, temp=0.02):
     # Reshape for broadcasting: (N, 1) and (1, M)
     y_true_col = y_true[:, None]
     y_pred_col = y_pred[:, None]
-    thresholds = get_prediction_thresholds_dynamic(y_pred)
+    # thresholds = get_prediction_thresholds_dynamic(y_pred)
+    thresholds = jnp.linspace(1e-5, 1.0 - 1e-5, 100)
     thresh_row = thresholds[None, :]
     
     # Soft approximation of indicator I(y_pred >= threshold)

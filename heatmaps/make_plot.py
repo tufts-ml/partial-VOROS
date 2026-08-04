@@ -41,7 +41,7 @@ for ax, seed in zip(axs.flat, clfs):
     fig.colorbar(im, ax=ax, label='pVOROS score')
     ax.set_xlabel('Angle (Degrees)')
     ax.set_ylabel('y-intercept (c)')
-    ax.set_title(f'Soft pVOROS (Sigmoid K=10): {seed}')
+    ax.set_title(f'Soft pVOROS (Sigmoid K=50): {seed}')
     
     # # Plot baseline anchor point
     # ax.scatter([np.degrees(theta_center)], [c_center], color='white', edgecolor='black', s=80, label='Trained')
@@ -49,5 +49,5 @@ for ax, seed in zip(axs.flat, clfs):
 
 axs.flat[-1].set_visible(False)
 plt.tight_layout()
-plt.savefig('soft_pv_k=10.pdf', format='pdf', dpi=300)
+plt.savefig('soft_pv_k=50_npoints=1000.pdf', format='pdf', dpi=300)
 plt.show()
