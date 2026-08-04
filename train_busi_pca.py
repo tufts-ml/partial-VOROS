@@ -2,11 +2,11 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import optax
+import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_curve
-from _geometry_jax import voros_jax
-from metrics_jax import pv_loss, pv_loss_fixed_thresh
+from metrics_jax import pvoros_score, pv_loss_fixed_thresh
 from pathlib import Path
 from train_busi import get_or_build_embeddings
 
@@ -185,7 +185,7 @@ def main():
         print(f"y_pred_val std : {float(jnp.std(y_pred_val)):.6f}")
 
         # Static Grid Score
-        val_loss_static = pv_loss_fixed_thresh(
+        pv_fixed_thresh = pv_loss_fixed_thresh(
             params, 
             x_val, 
             y_val_jax, 
@@ -196,25 +196,63 @@ def main():
             min_fp_cost_ratio, 
             max_fp_cost_ratio, 
             n_points)
-        score_static = -float(val_loss_static)
+        pv_fixed_thresh = -float(pv_fixed_thresh)
 
         # Empirical ROC VOROS Score
         fprs_emp, tprs_emp, _ = roc_curve(np.asarray(y_val), np.asarray(y_pred_val))
-        score_true = voros_jax(
-            jnp.asarray(fprs_emp, dtype=jnp.float64),
-            jnp.asarray(tprs_emp, dtype=jnp.float64),
-            κ=kappa_val,
-            α=alpha,
-            P=P_val,
-            N=N_val,
+        pv_score = pvoros_score(
+            y_true=y_val,
+            y_pred=y_pred_val,
+            alpha=alpha,
+            kappa_frac=0.5,
             min_fp_cost_ratio=min_fp_cost_ratio,
             max_fp_cost_ratio=max_fp_cost_ratio,
             n_points=n_points
         )
 
+        # Plot empirical ROC with alpha and kappa constraint bounds
+        P = int(np.sum(y_val == 1))
+        N = int(np.sum(y_val == 0))
+        prevalence = P / (P + N)
+        alpha_slope = alpha * (1 - prevalence) / (prevalence * (1 - alpha))
+        kappa_slope = -(N / P)
+        kappa_plot = 0.5 * (P + N)
+
+        fpr_grid = np.linspace(0.0, 1.0, 200)
+        tpr_alpha_bound = alpha_slope * fpr_grid
+        tpr_kappa_bound = kappa_slope * fpr_grid + (kappa_plot / P)
+
+        plt.figure(figsize=(8, 8))
+        plt.plot(fprs_emp, tprs_emp, color='#1f77b4', lw=2.5, label='Empirical ROC')
+        plt.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=1.2, label='Chance Baseline')
+        plt.plot(fpr_grid, tpr_alpha_bound, color='#d62728', linestyle='--', lw=2.0, label=f'Alpha Bound (slope={alpha_slope:.2f})')
+        plt.plot(fpr_grid, tpr_kappa_bound, color='#2ca02c', linestyle='--', lw=2.0, label=f'Kappa Bound (slope={kappa_slope:.2f})')
+
+        y_lower_clamped = np.clip(tpr_alpha_bound, 0.0, 1.0)
+        y_upper_clamped = np.clip(tpr_kappa_bound, 0.0, 1.0)
+        plt.fill_between(
+            fpr_grid,
+            y_lower_clamped,
+            y_upper_clamped,
+            where=(y_upper_clamped >= y_lower_clamped),
+            color='#ff7f0e', alpha=0.18, label='Feasible Region'
+        )
+
+        plt.xlim([-0.02, 1.02])
+        plt.ylim([-0.02, 1.02])
+        plt.xlabel('False Positive Rate (FPR)', fontsize=12)
+        plt.ylabel('True Positive Rate (TPR)', fontsize=12)
+        plt.title(f'ROC with Alpha/Kappa Bounds: {name}', fontsize=13)
+        plt.grid(True, linestyle=':', alpha=0.5)
+        plt.legend(loc='lower right', frameon=True, facecolor='white', framealpha=0.9)
+        plt.tight_layout()
+        plot_name = CACHE_DIR / f'roc_bounds_{name.replace(" ", "_").replace("/", "_")}.pdf'
+        plt.savefig(plot_name, format='pdf', dpi=300)
+        plt.close()
+
         results_summary[name] = {
-            "pv_fixed_thresh": score_static * 100,
-            "jax_pv": float(score_true) * 100,
+            "pv_fixed_thresh": pv_fixed_thresh * 100,
+            "pv_score": float(pv_score) * 100,
         }
 
         # Cache final model weights per dimension
@@ -226,10 +264,10 @@ def main():
     print("\n" + "=" * 65)
     print("            FINAL DIMENSION COMPARISON SUMMARY")
     print("=" * 65)
-    print(f"{'Representation':<25} | {'PV fixed thresh (%)':<18} | {'Jax PV (%)':<22}")
+    print(f"{'Representation':<25} | {'PV fixed thresh (%)':<18} | {'PV score (%)':<22}")
     print("-" * 65)
     for name, metrics in results_summary.items():
-        print(f"{name:<25} | {metrics['pv_fixed_thresh']:18.2f} | {metrics['jax_pv']:22.2f}")
+        print(f"{name:<25} | {metrics['pv_fixed_thresh']:18.2f} | {metrics['pv_score']:22.2f}")
     print("=" * 65)
 
 
