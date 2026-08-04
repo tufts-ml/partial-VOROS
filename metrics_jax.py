@@ -55,7 +55,7 @@ def pvoros_score(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_fp_co
 def prediction_thresholds_fixed():
     """Fixed thresholds for differentiable evaluation."""
     eps = 1e-5
-    thresholds = jnp.linspace(eps, 1.0 - eps, 1000)
+    thresholds = jnp.linspace(eps, 1.0 - eps, 100)
 
     return thresholds
 

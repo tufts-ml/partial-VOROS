@@ -18,7 +18,7 @@ VAL_FRACTION = 0.2
 SPLIT_SEED = 0
 
 LR = 1e-4       # Lower learning rate for Partial VOROS
-EPOCHS = 200
+EPOCHS = 50
 
 # Assuming EPOCHS, LR, VAL_FRACTION, SPLIT_SEED, CACHE_DIR, DATA_DIR, pv_loss are defined above
 
