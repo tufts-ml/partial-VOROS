@@ -135,28 +135,38 @@ if __name__=='__main__':
     yproba1_tr_M = be.predict_proba(x_tr_MF)[:, 1]
     yproba1_te_N = be.predict_proba(x_te_NF)[:, 1]
 
-    print("ROC AUC on final best estimator (after refit)")
-    print('train : %.3f' % roc_auc_score(
-        ytrue_tr_M, yproba1_tr_M))
-    print('test : %.3f' % roc_auc_score(
-        ytrue_te_N, yproba1_te_N))
+    train_auc = roc_auc_score(ytrue_tr_M, yproba1_tr_M)
+    test_auc = roc_auc_score(ytrue_te_N, yproba1_te_N)
 
+    print("ROC AUC on final best estimator (after refit)")
+    print('train : %.3f' % train_auc)
+    print('test : %.3f' % test_auc)
 
     print("VOROS score on final best estimator (after refit)")
     print('train : %.3f' % pvoros_score(
             ytrue_tr_M, yproba1_tr_M, 1e-6, 1.0, 0, 1e6))
-    # print(voros_score(ytrue_tr_M, yproba1_tr_M, 0, 1))
     print('test : %.3f' % pvoros_score(
             ytrue_te_N, yproba1_te_N, 1e-6, 1.0, 0, 1e6))
-    # print(voros_score(ytrue_te_N, yproba1_te_N, 0, 1))
 
+    # --- Plotting the ROC Curve ---
+    fpr_tr, tpr_tr, _ = roc_curve(ytrue_tr_M, yproba1_tr_M)
+    fpr_te, tpr_te, _ = roc_curve(ytrue_te_N, yproba1_te_N)
 
-    # print('V(0, 1/3) : %.3f' % pvoros_score(
-    #             ytrue_tr_M, yproba1_tr_M, 1e-6, 1.0, 0, 1/3))
-    # print('V(1/3, 2/3) : %.3f' % pvoros_score(
-    #             ytrue_tr_M, yproba1_tr_M, 1e-6, 1.0, 1/3, 2/3))
-    # print('V(2/3, 1) : %.3f' % pvoros_score(
-    #             ytrue_tr_M, yproba1_tr_M, 1e-6, 1.0, 2/3, 1))
-    
-    
+    plt.figure(figsize=(7, 6))
+    plt.plot(fpr_tr, tpr_tr, label=f'Train ROC (AUC = {train_auc:.3f})', color='navy', lw=2)
+    plt.plot(fpr_te, tpr_te, label=f'Test ROC (AUC = {test_auc:.3f})', color='darkorange', lw=2)
+    plt.plot([0, 1], [0, 1], label='Chance (AUC = 0.500)', color='gray', linestyle='--')
 
+    plt.xlim([-0.02, 1.02])
+    plt.ylim([-0.02, 1.02])
+    plt.xlabel('False Positive Rate (FPR)', fontsize=12)
+    plt.ylabel('True Positive Rate (TPR)', fontsize=12)
+    plt.title(f'ROC Curve (Logistic Regression, random_state={random_state})', fontsize=14)
+    plt.legend(loc='lower right', fontsize=11)
+    plt.grid(True, linestyle=':', alpha=0.6)
+
+    plt.tight_layout()
+    plot_path = os.path.join(script_dir, f'roc_curve_seed_{random_state}.png')
+    plt.savefig(plot_path, dpi=300)
+    plt.show()
+    print(f"ROC Curve plot saved to: {plot_path}")
