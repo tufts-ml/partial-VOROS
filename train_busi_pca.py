@@ -135,7 +135,7 @@ def main():
     print(f"Val samples:   {X_val_raw.shape[0]}, Malignant rate: {y_val.mean():.3f}")
 
     # Define target PCA dimensions to iterate over (alongside original full dimensions)
-    pca_dimensions = [2, 10, 20]
+    pca_dimensions = [120]
     
     # Pre-compute reduced representations for Train & Val
     datasets = {
@@ -159,7 +159,7 @@ def main():
         print(f"        RUNNING EXPERIMENT: {name}")
         print("=" * 65)
 
-        params = train_logreg(X_train, y_train)
+        params = train_logreg(X_train, y_train, n_restarts=3)
 
         x_val = jnp.asarray(X_val, dtype=jnp.float64)
         y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
