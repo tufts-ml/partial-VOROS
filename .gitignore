@@ -187,4 +187,7 @@ heatmaps/logs
 busi_training/busi_data
 cache
 
+busi_training/busi_embeddings
+busi_training/results
+
 *.zip
