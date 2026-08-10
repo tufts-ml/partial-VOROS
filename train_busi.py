@@ -18,7 +18,7 @@ import optax
 
 
 
-from metrics_jax import pv_loss
+from metrics_jax import pv_loss, pvoros_score
 from pathlib import Path
 
 from jax import config
@@ -143,12 +143,12 @@ def init_params(key, dim):
     }
 
 
-def get_prediction_thresholds_dynamic(y_pred, num_thresholds=100):
-    """Dynamic quantile thresholds for non-differentiable evaluation."""
-    eps = 1e-5
-    q = jnp.linspace(1.0 - eps, eps, num_thresholds)
-    thresholds = jnp.quantile(y_pred, q)
-    return jax.lax.stop_gradient(thresholds)
+# def get_prediction_thresholds_dynamic(y_pred, num_thresholds=100):
+#     """Dynamic quantile thresholds for non-differentiable evaluation."""
+#     eps = 1e-5
+#     q = jnp.linspace(1.0 - eps, eps, num_thresholds)
+#     thresholds = jnp.quantile(y_pred, q)
+#     return jax.lax.stop_gradient(thresholds)
 
 
 def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5):
@@ -163,19 +163,19 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5):
 
     P = jnp.sum(y == 1.0)
     N = jnp.sum(y == 0.0)
-    kappa = 0.5 * (P + N)
-    alpha = 0.3
+    kappa = 1.0 * (P + N)
+    alpha = 0.1
     min_fp_cost_ratio = 1 / 9
     max_fp_cost_ratio = 1 / 6
     n_points = 1000
-    temp = 0.08  # Smoother temperature guarantees active non-zero gradients
+    temp = 0.02  # Smoother temperature guarantees active non-zero gradients
 
     # Static 100-point grid for optimization prevents 'chasing thresholds' zero-gradient trap
     static_train_thresholds = jnp.linspace(0.001, 0.999, 100)
 
     def loss_fn(p):
         return pv_loss(
-            p, x, y, P, N, kappa, alpha, static_train_thresholds,
+            p, x, y, P, N, kappa, alpha,
             min_fp_cost_ratio, max_fp_cost_ratio, n_points, temp
         )
 
@@ -243,8 +243,8 @@ def main():
     
     P_val = jnp.sum(y_val == 1.0)
     N_val = jnp.sum(y_val == 0.0)
-    kappa_val = 0.5 * (P_val + N_val)
-    alpha = 0.3
+    kappa_val = 1.0 * (P_val + N_val)
+    alpha = 0.1
     min_fp_cost_ratio = 1 / 9
     max_fp_cost_ratio = 1 / 6
     n_points = 1000
@@ -275,25 +275,14 @@ def main():
     # --- Method 1: Static Grid Thresholds ---
     static_val_thresholds = jnp.linspace(0.001, 0.999, 100)
     val_loss_static = pv_loss(
-        params, x_val, y_val, P_val, N_val, kappa_val, alpha,
-        static_val_thresholds, min_fp_cost_ratio, max_fp_cost_ratio, n_points, temp=0.08
+        params, x_val, y_val, P_val, N_val, kappa_val, alpha, min_fp_cost_ratio, max_fp_cost_ratio, n_points, temp=0.02
     )
     score_static = -float(val_loss_static)
 
     # --- Method 2: Empirical Hard ROC Curve (bypasses sigmoid saturation) ---
-    fprs_emp, tprs_emp, _ = roc_curve(np.asarray(y_val), np.asarray(y_pred_val))
+    # fprs_emp, tprs_emp, _ = roc_curve(np.asarray(y_val), np.asarray(y_pred_val))
     
-    score_true = voros_jax(
-        jnp.asarray(fprs_emp, dtype=jnp.float64),
-        jnp.asarray(tprs_emp, dtype=jnp.float64),
-        κ=kappa_val,
-        α=alpha,
-        P=P_val,
-        N=N_val,
-        min_fp_cost_ratio=min_fp_cost_ratio,
-        max_fp_cost_ratio=max_fp_cost_ratio,
-        n_points=n_points
-    )
+    score_true = pvoros_score(y_val, y_pred_val, alpha, kappa_val, min_fp_cost_ratio, max_fp_cost_ratio, n_points=n_points)
 
     print("\n" + "=" * 55)
     print("        VALIDATION PARTIAL VOROS COMPARISON")

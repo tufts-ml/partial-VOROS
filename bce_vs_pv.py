@@ -34,7 +34,7 @@ N_POINTS = 100  # 100 points is fast for training steps while staying accurate
 LEARNING_RATE = 0.01
 N_EPOCHS = 100
 EVAL_EVERY_N_EPOCHS = 10  # Track pVOROS score every 10 epochs during BCE trajectory search
-VAL_FRACTION = 0.2
+VAL_FRACTION = 0.5
 N_RESTARTS = 10  # Number of random initializations
 
 SEED_FILENAMES = [

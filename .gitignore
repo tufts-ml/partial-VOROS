@@ -184,7 +184,7 @@ debugging_training.py
 
 heatmaps/logs
 
-busi_data
+busi_training/busi_data
 cache
 
 *.zip
