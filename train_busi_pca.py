@@ -9,8 +9,10 @@ from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_curve
-from metrics_jax import pvoros_score, pv_loss_fixed_thresh
+from sklearn.preprocessing import StandardScaler
+from metrics_jax import pvoros_score, pv_loss_fixed_thresh, soft_roc_fixed_thresholds
 from metrics import pvoros_score as pvoros_score_np
+import _geometry_jax
 from pathlib import Path
 
 DATA_DIR = Path("busi_training/busi_embeddings")       # expects DATA_DIR/{benign,malignant,normal}/*.png
@@ -60,6 +62,58 @@ def load_embeddings_and_labels(root: Path):
         raise ValueError(f"No embeddings were found in {root}")
 
     return np.vstack(embeddings), np.asarray(labels, dtype=int)
+
+
+def convex_hull_roc(fprs, tprs):
+    """Return the upper convex hull of an ROC curve.
+
+    The ROC curve from sklearn is already sorted by increasing FPR, so the
+    upper convex hull can be computed with a simple monotonic-chain algorithm.
+    """
+    points = np.column_stack((fprs, tprs))
+    hull = []
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - a[1]) - (a[1] - o[1]) * (b[0] - a[0])
+
+    for pt in points:
+        while len(hull) >= 2 and cross(hull[-2], hull[-1], pt) >= 0:
+            hull.pop()
+        hull.append(pt)
+
+    return np.asarray(hull)
+
+
+def plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=None, x_min=0.0, x_max=1.0, color='gray', alpha=0.2):
+    """Plot iso-performance lines through each hull point using _geometry_jax._iso_performance_line."""
+    if hull_pts.shape[0] == 0:
+        return
+
+    if fp_cost_ratios is None:
+        fp_cost_ratios = np.linspace(0.05, 0.95, 5)
+
+    x_vals = np.linspace(x_min, x_max, 200)
+
+    for r in fp_cost_ratios:
+        t = float(_geometry_jax.ratio_to_t(r, P, N))
+        for h, k in hull_pts:
+            a_j, b_j, c_j = _geometry_jax._iso_performance_line(h, k, t)
+            a = float(a_j)
+            b = float(b_j)
+            c = float(c_j)
+
+            if abs(b) < 1e-12:
+                # vertical line x = c/a
+                if abs(a) < 1e-12:
+                    continue
+                x_line = float(c / a)
+                if x_line < x_min or x_line > x_max:
+                    continue
+                ax.plot([x_line, x_line], [0.0, 1.0], linestyle=':', color=color, alpha=alpha)
+            else:
+                y_vals = (c - a * x_vals) / b
+                y_vals = np.clip(y_vals, 0.0, 1.0)
+                ax.plot(x_vals, y_vals, linestyle=':', color=color, alpha=alpha)
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +246,12 @@ def main():
 
     for dim in pca_dimensions:
         pca = PCA(n_components=dim, random_state=42)
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train_raw)
+        X_val = scaler.transform(X_val_raw)
         # Fit PCA exclusively on train set, then transform both train and val
-        X_train_pca = pca.fit_transform(X_train_raw)
-        X_val_pca = pca.transform(X_val_raw)
+        X_train_pca = pca.fit_transform(X_train)
+        X_val_pca = pca.transform(X_val)
         
         explained_var = np.sum(pca.explained_variance_ratio_) * 100
         datasets[f"PCA {dim}D ({explained_var:.1f}% var)"] = (X_train_pca, X_val_pca)
@@ -207,7 +264,7 @@ def main():
         print(f"        RUNNING EXPERIMENT: {name}")
         print("=" * 65)
 
-        pv_params = train_logreg(X_train, y_train, n_restarts=2)
+        pv_params = train_logreg(X_train, y_train, n_restarts=1)
         baseline_params = train_baseline_logreg(X_train, y_train, seed=SPLIT_SEED)
 
         x_val = jnp.asarray(X_val, dtype=jnp.float64)
@@ -276,6 +333,20 @@ def main():
             n_points=n_points
         )
 
+        # Compute a smooth ROC curve alongside the discrete ROC for comparison
+        soft_fprs, soft_tprs, _ = soft_roc_fixed_thresholds(
+            y_val_jax,
+            pv_y_pred_val,
+            temp=0.02,
+        )
+        soft_fprs = np.asarray(soft_fprs, dtype=float)
+        soft_tprs = np.asarray(soft_tprs, dtype=float)
+        soft_fprs = np.clip(soft_fprs, 0.0, 1.0)
+        soft_tprs = np.clip(soft_tprs, 0.0, 1.0)
+        sort_idx = np.argsort(soft_fprs)
+        soft_fprs = soft_fprs[sort_idx]
+        soft_tprs = soft_tprs[sort_idx]
+
         # Plot empirical ROC with alpha and kappa constraint bounds
         P = int(np.sum(y_val == 1))
         N = int(np.sum(y_val == 0))
@@ -284,19 +355,33 @@ def main():
         kappa_slope = -(N / P)
         kappa_plot = 0.5 * (P + N)
 
+        feasible_mask = np.array([
+            _geometry_jax.keep_model(float(fpr), float(tpr), alpha, kappa_plot, N, P)
+            for fpr, tpr in zip(fprs_emp, tprs_emp)
+        ], dtype=bool)
+
+        hull_pts = convex_hull_roc(
+            fprs_emp[feasible_mask],
+            tprs_emp[feasible_mask],
+        )
+
         fpr_grid = np.linspace(0.0, 1.0, 200)
         tpr_alpha_bound = alpha_slope * fpr_grid
         tpr_kappa_bound = kappa_slope * fpr_grid + (kappa_plot / P)
 
-        plt.figure(figsize=(8, 8))
-        plt.plot(fprs_emp, tprs_emp, color='#1f77b4', lw=2.5, label='PV ROC')
-        plt.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=1.2, label='Chance Baseline')
-        plt.plot(fpr_grid, tpr_alpha_bound, color='#d62728', linestyle='--', lw=2.0, label=f'Alpha Bound (slope={alpha_slope:.2f})')
-        plt.plot(fpr_grid, tpr_kappa_bound, color='#2ca02c', linestyle='--', lw=2.0, label=f'Kappa Bound (slope={kappa_slope:.2f})')
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.plot(fprs_emp, tprs_emp, color='#1f77b4', lw=2.5, label='PV ROC (discrete)')
+        ax.plot(soft_fprs, soft_tprs, color='#ff7f0e', lw=2.0, label='PV ROC (smooth)')
+        ax.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=1.2, label='Chance Baseline')
+        ax.plot(fpr_grid, tpr_alpha_bound, color='#d62728', linestyle='--', lw=2.0, label=f'Alpha Bound (slope={alpha_slope:.2f})')
+        ax.plot(fpr_grid, tpr_kappa_bound, color='#2ca02c', linestyle='--', lw=2.0, label=f'Kappa Bound (slope={kappa_slope:.2f})')
+
+        fp_cost_ratios = np.linspace(min_fp_cost_ratio, max_fp_cost_ratio, 5)
+        plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=fp_cost_ratios, x_min=0.0, x_max=1.0, color='black', alpha=0.12)
 
         y_lower_clamped = np.clip(tpr_alpha_bound, 0.0, 1.0)
         y_upper_clamped = np.clip(tpr_kappa_bound, 0.0, 1.0)
-        plt.fill_between(
+        ax.fill_between(
             fpr_grid,
             y_lower_clamped,
             y_upper_clamped,
@@ -304,19 +389,21 @@ def main():
             color='#ff7f0e', alpha=0.18, label='Feasible Region'
         )
 
-        plt.xlim([-0.02, 1.02])
-        plt.ylim([-0.02, 1.02])
-        plt.xlabel('False Positive Rate (FPR)', fontsize=12)
-        plt.ylabel('True Positive Rate (TPR)', fontsize=12)
-        plt.title(f'ROC with Alpha/Kappa Bounds: {name}', fontsize=13)
-        plt.grid(True, linestyle=':', alpha=0.5)
-        plt.legend(loc='lower right', frameon=True, facecolor='white', framealpha=0.9)
-        plt.tight_layout()
-        plot_name = RESULTS_DIR / f'roc_bounds_{name.replace(" ", "_").replace("/", "_")}.pdf'
-        plt.savefig(plot_name, format='pdf', dpi=300)
-        plt.close()
+        ax.scatter(hull_pts[:, 0], hull_pts[:, 1], color='black', s=30, zorder=5, label='ROC Hull Points')
 
-        baseline_fprs_emp, baseline_tprs_emp, _ = roc_curve(np.asarray(y_val), np.asarray(baseline_y_pred_val))
+        ax.set_xlim([-0.02, 1.02])
+        ax.set_ylim([-0.02, 1.02])
+        ax.set_xlabel('False Positive Rate (FPR)', fontsize=12)
+        ax.set_ylabel('True Positive Rate (TPR)', fontsize=12)
+        ax.set_title(f'ROC with Alpha/Kappa Bounds: {name}', fontsize=13)
+        ax.grid(True, linestyle=':', alpha=0.5)
+        ax.legend(loc='lower right', frameon=True, facecolor='white', framealpha=0.9)
+        fig.tight_layout()
+        plot_name = RESULTS_DIR / f'roc_bounds_{name.replace(" ", "_").replace("/", "_")}.pdf'
+        fig.savefig(plot_name, format='pdf', dpi=300)
+        plt.close(fig)
+
+        _, _, _ = roc_curve(np.asarray(y_val), np.asarray(baseline_y_pred_val))
         baseline_pv_score = pvoros_score(
             y_true=y_val,
             y_pred=baseline_y_pred_val,
