@@ -226,7 +226,7 @@ def pv_loss_fixed_thresh(
     y_val_1d = y_scores.ravel()
     
     # 2. Compute smooth ROC curve anchored at (0,0)
-    fprs_raw, tprs_raw, _ = soft_roc_fixed_thresholds(y_val_1d, y, temp=temp)
+    fprs_raw, tprs_raw, _ = soft_roc_fixed_thresholds(y, y_val_1d, temp=temp)
     fprs_smooth = fprs_raw.at[0].set(0.0)
     tprs_smooth = tprs_raw.at[0].set(0.0)
     
