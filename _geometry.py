@@ -161,6 +161,10 @@ def _iso_performance_line(h, k, t):
     Treat line through (h,k) and (x_iso1,1).
     Returns line in normalized form a*x + b*y = c with orientation such that region 'below' (toward origin) is kept.
     """
+
+    if abs(t) < 1e-12:
+        return (0.0, 1.0, float(k))
+    
     x2 = h + k - 1 + (1 - k) / t
     y2 = 1.0
     x1, y1 = h, k
