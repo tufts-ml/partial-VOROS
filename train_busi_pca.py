@@ -618,7 +618,7 @@ def main():
     print("\n" + "=" * 65)
     print("            FINAL DIMENSION COMPARISON SUMMARY")
     print("=" * 65)
-    print(f"{'Representation':<25} | {'soft PV score (%)':<18} | {'PV score (%)':<18} | {'Baseline PV score (%)':<22}")
+    print(f"{'Representation':<25} | {'Soft PV score (%)':<18} | {'PV score (%)':<18} | {'LR-init PV score (%)':<22} | {'Baseline PV score (%)':<22}")
     print("-" * 65)
     for name, metrics in results_summary.items():
         print(f"{name:<25} | {metrics['pv_fixed_thresh']:18.2f} | {metrics['pv_score']:18.2f} | {metrics['pv_from_baseline_score']:22.2f} | {metrics['baseline_pv_score']:22.2f}")
