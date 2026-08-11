@@ -22,11 +22,11 @@ VAL_FRACTION = 0.2
 SPLIT_SEED = 0
 
 LR = 1e-4       # Lower learning rate for Partial VOROS
-EPOCHS = 50
+EPOCHS = 100
 
-# Assuming EPOCHS, LR, VAL_FRACTION, SPLIT_SEED, RESULTS_DIR, DATA_DIR, pv_loss are defined above
 
 def split_train_val(feats, labels, val_fraction=VAL_FRACTION, seed=SPLIT_SEED):
+    """Split features and labels into training and validation sets"""
     return train_test_split(
         feats, labels,
         test_size=val_fraction,
@@ -65,11 +65,7 @@ def load_embeddings_and_labels(root: Path):
 
 
 def convex_hull_roc(fprs, tprs):
-    """Return the upper convex hull of an ROC curve.
-
-    The ROC curve from sklearn is already sorted by increasing FPR, so the
-    upper convex hull can be computed with a simple monotonic-chain algorithm.
-    """
+    """Return the upper convex hull of an ROC curve."""
     points = np.column_stack((fprs, tprs))
     hull = []
 
@@ -103,7 +99,6 @@ def plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=None, x_min=0.
             c = float(c_j)
 
             if abs(b) < 1e-12:
-                # vertical line x = c/a
                 if abs(a) < 1e-12:
                     continue
                 x_line = float(c / a)
@@ -116,9 +111,6 @@ def plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=None, x_min=0.
                 ax.plot(x_vals, y_vals, linestyle=':', color=color, alpha=alpha)
 
 
-# ---------------------------------------------------------------------------
-# 3. Dynamic & Static Score Thresholding
-# ---------------------------------------------------------------------------
 def init_params(key, dim):
     return {
         "theta": jax.random.normal(key, (dim,), dtype=jnp.float64) * 0.01,
@@ -127,6 +119,7 @@ def init_params(key, dim):
 
 
 def train_baseline_logreg(feats, labels, seed=0):
+    """Baseline (min-BCE) logistic regression classifier"""
     clf = LogisticRegression(
         solver="lbfgs",
         max_iter=1000,
@@ -140,6 +133,7 @@ def train_baseline_logreg(feats, labels, seed=0):
 
 
 def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, inits_per_seed=10):
+    """Training procedure for soft PV-objective logistic regression """
     x = jnp.asarray(feats, dtype=jnp.float64)
     y = jnp.asarray(labels, dtype=jnp.float64)
 
@@ -148,6 +142,7 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
         optax.adamw(learning_rate=lr, weight_decay=1e-2)
     )
 
+    # Constraints
     P = jnp.sum(y == 1.0)
     N = jnp.sum(y == 0.0)
     kappa = 0.5 * (P + N)
@@ -155,6 +150,8 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
     min_fp_cost_ratio = 1 / 9
     max_fp_cost_ratio = 1 / 6
 
+    
+    # Loss
     def loss_fn(p):
         pv_params = {
             "w": p.get("theta", p.get("w")),
@@ -167,10 +164,14 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
 
     @jax.jit
     def train_step(params, opt_state):
+        """Train step: update parameters based on gradient"""
+
         loss, grads = jax.value_and_grad(loss_fn)(params)
         updates, opt_state = optimizer.update(grads, opt_state, params=params)
         params = optax.apply_updates(params, updates)
         return params, opt_state, loss, grads
+
+
 
     def run_single_init(init_key):
         params = init_params(init_key, x.shape[1])
@@ -178,26 +179,27 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
 
         best_params = params
         best_loss = float("inf")
+        history = []
 
         for _ in range(epochs):
             params, opt_state, loss, _ = train_step(params, opt_state)
             curr_loss = float(loss)
+            history.append(curr_loss)
 
             if curr_loss < best_loss and not np.isnan(curr_loss):
                 best_loss = curr_loss
                 best_params = params
 
-        return best_params, best_loss
+        return best_params, best_loss, history
 
     best_overall_params = None
     best_overall_loss = float("inf")
+    all_trace_histories = []
 
-    # Outer loop: External Seeds
+    # Run random initializations
     for i in range(n_restarts):
         run_seed = seed + i
         seed_key = jax.random.PRNGKey(run_seed)
-        
-        # Derive 10 distinct subkeys for weight initializations under this seed
         init_keys = jax.random.split(seed_key, inits_per_seed)
 
         print(f"\n--- Seed {run_seed} ({i + 1}/{n_restarts}) | Training {inits_per_seed} Weight Inits ---")
@@ -205,9 +207,15 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
         seed_best_params = None
         seed_best_loss = float("inf")
 
-        # Inner loop: 10 random weight initializations per seed
         for init_idx, k in enumerate(init_keys):
-            params, final_loss = run_single_init(k)
+            params, final_loss, history = run_single_init(k)
+
+            # Save losses for plotting trace
+            all_trace_histories.append({
+                "seed": run_seed,
+                "init_idx": init_idx,
+                "history": history,
+            })
             print(f"  └─ Init {init_idx + 1:2d}/{inits_per_seed} -> Loss: {final_loss:.4f}")
 
             if final_loss < seed_best_loss:
@@ -221,7 +229,46 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
             best_overall_params = seed_best_params
 
     print(f"\n[SUMMARY] Best Overall Loss across all seeds & inits: {best_overall_loss:.4f}")
-    return best_overall_params
+    return best_overall_params, all_trace_histories
+
+
+def plot_loss_traces(trace_histories, dataset_name, results_dir):
+    """Plot soft PV loss over epoch for every initialization"""
+    epochs_range = np.arange(1, EPOCHS + 1)
+    
+    fig, ax = plt.subplots(figsize=(9, 6))
+    
+    # Identify best overall run to highlight
+    best_final_loss = float("inf")
+    best_history = None
+
+    for run in trace_histories:
+        hist = run["history"]
+        if hist[-1] < best_final_loss:
+            best_final_loss = hist[-1]
+            best_history = hist
+
+    # Plot all traces with light alpha
+    for idx, run in enumerate(trace_histories):
+        label = "Individual Inits" if idx == 0 else None
+        ax.plot(epochs_range, run["history"], color='#1f77b4', alpha=0.25, lw=1.2, label=label)
+
+    # Overlay best run
+    if best_history is not None:
+        ax.plot(epochs_range, best_history, color='#d62728', lw=2.5, label=f'Best Run (Min Loss = {best_final_loss:.4f})')
+
+    ax.set_xlabel('Epoch', fontsize=12)
+    ax.set_ylabel('Soft Partial VOROS Loss', fontsize=12)
+    ax.set_title(f'Loss Trace across Initializations: {dataset_name}', fontsize=13)
+    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.legend(loc='upper right', frameon=True, facecolor='white', framealpha=0.9)
+    fig.tight_layout()
+
+    filename_safe = dataset_name.replace(" ", "_").replace("/", "_").replace("(", "").replace(")", "").replace("%", "")
+    trace_plot_path = results_dir / f'loss_trace_{filename_safe}.pdf'
+    fig.savefig(trace_plot_path, format='pdf', dpi=300)
+    plt.close(fig)
+    print(f"Saved loss trace plot: {trace_plot_path}")
 
 
 def train_logreg_from_baseline_init(feats, labels, init_params, epochs=EPOCHS, lr=LR, seed=0):
@@ -280,16 +327,13 @@ def train_logreg_from_baseline_init(feats, labels, init_params, epochs=EPOCHS, l
 def main():
     all_feats, all_labels = load_embeddings_and_labels(DATA_DIR)
 
-    # Split train/val ONCE before applying PCA to avoid data leakage
     X_train_raw, X_val_raw, y_train, y_val = split_train_val(all_feats, all_labels)
 
     print(f"Train samples: {X_train_raw.shape[0]}, Malignant rate: {y_train.mean():.3f}")
     print(f"Val samples:   {X_val_raw.shape[0]}, Malignant rate: {y_val.mean():.3f}")
 
-    # Define target PCA dimensions to iterate over (alongside original full dimensions)
     pca_dimensions = [2, 30, 120]
     
-    # Pre-compute reduced representations for Train & Val
     datasets = {
         f"Full ({X_train_raw.shape[1]}D)": (X_train_raw, X_val_raw)
     }
@@ -299,7 +343,6 @@ def main():
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train_raw)
         X_val = scaler.transform(X_val_raw)
-        # Fit PCA exclusively on train set, then transform both train and val
         X_train_pca = pca.fit_transform(X_train)
         X_val_pca = pca.transform(X_val)
         
@@ -308,13 +351,17 @@ def main():
 
     results_summary = {}
 
-    # Iterate through each feature dimensionality configuration
     for name, (X_train, X_val) in datasets.items():
         print("\n" + "=" * 65)
         print(f"        RUNNING EXPERIMENT: {name}")
         print("=" * 65)
 
-        pv_params = train_logreg(X_train, y_train, n_restarts=1)
+        # Train model and extract loss histories for all initializations
+        pv_params, trace_histories = train_logreg(X_train, y_train, n_restarts=1)
+        
+        # Plot and save trace curves for all initializations
+        plot_loss_traces(trace_histories, name, RESULTS_DIR)
+
         baseline_params = train_baseline_logreg(X_train, y_train, seed=SPLIT_SEED)
         pv_from_baseline_params, pv_from_baseline_loss = train_logreg_from_baseline_init(
             X_train, y_train, baseline_params, epochs=EPOCHS, lr=LR, seed=SPLIT_SEED
@@ -349,10 +396,6 @@ def main():
         print(f"PV y_pred_val max : {float(jnp.max(pv_y_pred_val)):.6f}")
         print(f"PV y_pred_val mean: {float(jnp.mean(pv_y_pred_val)):.6f}")
         print(f"PV y_pred_val std : {float(jnp.std(pv_y_pred_val)):.6f}")
-        print(f"Baseline y_pred_val min : {float(jnp.min(baseline_y_pred_val)):.6f}")
-        print(f"Baseline y_pred_val max : {float(jnp.max(baseline_y_pred_val)):.6f}")
-        print(f"Baseline y_pred_val mean: {float(jnp.mean(baseline_y_pred_val)):.6f}")
-        print(f"Baseline y_pred_val std : {float(jnp.std(baseline_y_pred_val)):.6f}")
 
         # Static Grid Score
         pv_fixed_thresh = pv_loss_fixed_thresh(
@@ -525,7 +568,6 @@ def main():
         fig.savefig(plot_name, format='pdf', dpi=300)
         plt.close(fig)
 
-        _, _, _ = roc_curve(np.asarray(y_val), np.asarray(baseline_y_pred_val))
         baseline_pv_score = pvoros_score(
             y_true=y_val,
             y_pred=baseline_y_pred_val,
@@ -572,12 +614,12 @@ def main():
         np.save(RESULTS_DIR / f"lr_init_pv_theta_{dim_label}.npy", np.asarray(pv_from_baseline_params["theta"]))
         np.save(RESULTS_DIR / f"lr_init_pv_c_{dim_label}.npy", np.asarray(pv_from_baseline_params["c"]))
 
-    # Final summary banner printout
+    # Summary
     print("\n" + "=" * 65)
     print("            FINAL DIMENSION COMPARISON SUMMARY")
     print("=" * 65)
-    print(f"{'Representation':<25} | {'PV fixed thresh (%)':<18} | {'PV score (%)':<18} | {'LR-init PV score (%)':<22} | {'Baseline PV score (%)':<22}")
-    print("-" * 95)
+    print(f"{'Representation':<25} | {'soft PV score (%)':<18} | {'PV score (%)':<18} | {'Baseline PV score (%)':<22}")
+    print("-" * 65)
     for name, metrics in results_summary.items():
         print(f"{name:<25} | {metrics['pv_fixed_thresh']:18.2f} | {metrics['pv_score']:18.2f} | {metrics['pv_from_baseline_score']:22.2f} | {metrics['baseline_pv_score']:22.2f}")
     print("=" * 65)
