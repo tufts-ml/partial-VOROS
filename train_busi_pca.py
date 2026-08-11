@@ -224,6 +224,56 @@ def train_logreg(feats, labels, epochs=EPOCHS, lr=LR, seed=0, n_restarts=5, init
     return best_overall_params
 
 
+def train_logreg_from_baseline_init(feats, labels, init_params, epochs=EPOCHS, lr=LR, seed=0):
+    """Fine-tune a trained logistic-regression initializer with the PV loss."""
+    x = jnp.asarray(feats, dtype=jnp.float64)
+    y = jnp.asarray(labels, dtype=jnp.float64)
+
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(1.0),
+        optax.adamw(learning_rate=lr, weight_decay=1e-2)
+    )
+
+    P = jnp.sum(y == 1.0)
+    N = jnp.sum(y == 0.0)
+    kappa = 0.5 * (P + N)
+    alpha = 0.27
+    min_fp_cost_ratio = 1 / 9
+    max_fp_cost_ratio = 1 / 6
+
+    def loss_fn(p):
+        pv_params = {
+            "w": p.get("theta", p.get("w")),
+            "b": p.get("c", p.get("b")),
+        }
+        return pv_loss_fixed_thresh(
+            pv_params, x, y, P, N, kappa, alpha,
+            min_fp_cost_ratio, max_fp_cost_ratio
+        )
+
+    params = {
+        "theta": jnp.asarray(init_params["theta"], dtype=jnp.float64),
+        "c": jnp.asarray(init_params["c"], dtype=jnp.float64),
+    }
+    opt_state = optimizer.init(params)
+
+    best_params = params
+    best_loss = float("inf")
+
+    for epoch_idx in range(epochs):
+        loss, grads = jax.value_and_grad(loss_fn)(params)
+        updates, opt_state = optimizer.update(grads, opt_state, params=params)
+        params = optax.apply_updates(params, updates)
+        curr_loss = float(loss)
+
+        if curr_loss < best_loss and not np.isnan(curr_loss):
+            best_loss = curr_loss
+            best_params = params
+
+    print(f"[LR->PV init] seed={seed} | best loss={best_loss:.4f}")
+    return best_params, best_loss
+
+
 # ---------------------------------------------------------------------------
 # 4. Main Pipeline (Loops across Full & PCA Reduced Dimensions)
 # ---------------------------------------------------------------------------
@@ -266,6 +316,9 @@ def main():
 
         pv_params = train_logreg(X_train, y_train, n_restarts=1)
         baseline_params = train_baseline_logreg(X_train, y_train, seed=SPLIT_SEED)
+        pv_from_baseline_params, pv_from_baseline_loss = train_logreg_from_baseline_init(
+            X_train, y_train, baseline_params, epochs=EPOCHS, lr=LR, seed=SPLIT_SEED
+        )
 
         x_val = jnp.asarray(X_val, dtype=jnp.float64)
         y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
@@ -286,6 +339,9 @@ def main():
             dtype=jnp.float64,
         )
         baseline_y_pred_val = jax.nn.sigmoid(baseline_logits_val)
+
+        pv_from_baseline_logits_val = jnp.dot(x_val, pv_from_baseline_params["theta"]) + pv_from_baseline_params["c"]
+        pv_from_baseline_y_pred_val = jax.nn.sigmoid(pv_from_baseline_logits_val)
 
         # Diagnostics
         print("\n--- VALIDATION PREDICTIONS DIAGNOSTIC ---")
@@ -312,6 +368,20 @@ def main():
             n_points=n_points)
         pv_fixed_thresh = -float(pv_fixed_thresh)
 
+        pv_from_baseline_fixed_thresh = pv_loss_fixed_thresh(
+            pv_from_baseline_params,
+            x_val,
+            y_val_jax,
+            P_val,
+            N_val,
+            kappa_val,
+            alpha,
+            min_fp_cost_ratio,
+            max_fp_cost_ratio,
+            n_points=n_points,
+        )
+        pv_from_baseline_fixed_thresh = -float(pv_from_baseline_fixed_thresh)
+
         # Empirical ROC VOROS Score
         fprs_emp, tprs_emp, _ = roc_curve(np.asarray(y_val), np.asarray(pv_y_pred_val))
         pv_score = pvoros_score(
@@ -333,6 +403,29 @@ def main():
             n_points=n_points
         )
 
+        fprs_emp_from_baseline, tprs_emp_from_baseline, _ = roc_curve(
+            np.asarray(y_val),
+            np.asarray(pv_from_baseline_y_pred_val),
+        )
+        pv_from_baseline_score = pvoros_score(
+            y_true=y_val,
+            y_pred=pv_from_baseline_y_pred_val,
+            alpha=alpha,
+            kappa_frac=0.5,
+            min_fp_cost_ratio=min_fp_cost_ratio,
+            max_fp_cost_ratio=max_fp_cost_ratio,
+            n_points=n_points,
+        )
+        pv_from_baseline_score_np = pvoros_score_np(
+            y_true=np.asarray(y_val),
+            y_pred=np.asarray(pv_from_baseline_y_pred_val),
+            alpha=alpha,
+            kappa_frac=0.5,
+            min_fp_cost_ratio=min_fp_cost_ratio,
+            max_fp_cost_ratio=max_fp_cost_ratio,
+            n_points=n_points,
+        )
+
         # Compute a smooth ROC curve alongside the discrete ROC for comparison
         soft_fprs, soft_tprs, _ = soft_roc_fixed_thresholds(
             y_val_jax,
@@ -346,6 +439,19 @@ def main():
         sort_idx = np.argsort(soft_fprs)
         soft_fprs = soft_fprs[sort_idx]
         soft_tprs = soft_tprs[sort_idx]
+
+        pv_from_baseline_soft_fprs, pv_from_baseline_soft_tprs, _ = soft_roc_fixed_thresholds(
+            y_val_jax,
+            pv_from_baseline_y_pred_val,
+            temp=0.02,
+        )
+        pv_from_baseline_soft_fprs = np.asarray(pv_from_baseline_soft_fprs, dtype=float)
+        pv_from_baseline_soft_tprs = np.asarray(pv_from_baseline_soft_tprs, dtype=float)
+        pv_from_baseline_soft_fprs = np.clip(pv_from_baseline_soft_fprs, 0.0, 1.0)
+        pv_from_baseline_soft_tprs = np.clip(pv_from_baseline_soft_tprs, 0.0, 1.0)
+        pv_from_baseline_soft_sort_idx = np.argsort(pv_from_baseline_soft_fprs)
+        pv_from_baseline_soft_fprs = pv_from_baseline_soft_fprs[pv_from_baseline_soft_sort_idx]
+        pv_from_baseline_soft_tprs = pv_from_baseline_soft_tprs[pv_from_baseline_soft_sort_idx]
 
         # Plot empirical ROC with alpha and kappa constraint bounds
         P = int(np.sum(y_val == 1))
@@ -372,6 +478,22 @@ def main():
         fig, ax = plt.subplots(figsize=(8, 8))
         ax.plot(fprs_emp, tprs_emp, color='#1f77b4', lw=2.5, label='PV ROC (discrete)')
         ax.plot(soft_fprs, soft_tprs, color='#ff7f0e', lw=2.0, label='PV ROC (smooth)')
+        ax.plot(
+            fprs_emp_from_baseline,
+            tprs_emp_from_baseline,
+            color='#9467bd',
+            lw=2.0,
+            linestyle='-.',
+            label='LR-init PV ROC (discrete)',
+        )
+        ax.plot(
+            pv_from_baseline_soft_fprs,
+            pv_from_baseline_soft_tprs,
+            color='#8c564b',
+            lw=1.8,
+            linestyle=':',
+            label='LR-init PV ROC (smooth)',
+        )
         ax.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=1.2, label='Chance Baseline')
         ax.plot(fpr_grid, tpr_alpha_bound, color='#d62728', linestyle='--', lw=2.0, label=f'Alpha Bound (slope={alpha_slope:.2f})')
         ax.plot(fpr_grid, tpr_kappa_bound, color='#2ca02c', linestyle='--', lw=2.0, label=f'Kappa Bound (slope={kappa_slope:.2f})')
@@ -427,12 +549,17 @@ def main():
             "pv_fixed_thresh": pv_fixed_thresh * 100,
             "pv_score": float(pv_score) * 100,
             "pv_score_np": float(pv_score_np) * 100,
+            "pv_from_baseline_fixed_thresh": pv_from_baseline_fixed_thresh * 100,
+            "pv_from_baseline_score": float(pv_from_baseline_score) * 100,
+            "pv_from_baseline_score_np": float(pv_from_baseline_score_np) * 100,
             "baseline_pv_score": float(baseline_pv_score) * 100,
             "baseline_pv_score_np": float(baseline_pv_score_np) * 100,
         }
 
         print(f"PV validation pVOROS (JAX): {pv_score:.4f}")
         print(f"PV validation pVOROS (NumPy): {pv_score_np:.4f}")
+        print(f"LR-init PV validation pVOROS (JAX): {pv_from_baseline_score:.4f}")
+        print(f"LR-init PV validation pVOROS (NumPy): {pv_from_baseline_score_np:.4f}")
         print(f"Baseline logistic regression pVOROS (JAX): {baseline_pv_score:.4f}")
         print(f"Baseline logistic regression pVOROS (NumPy): {baseline_pv_score_np:.4f}")
 
@@ -442,15 +569,17 @@ def main():
         np.save(RESULTS_DIR / f"logreg_c_{dim_label}.npy", np.asarray(pv_params["c"]))
         np.save(RESULTS_DIR / f"baseline_logreg_theta_{dim_label}.npy", np.asarray(baseline_params["theta"]))
         np.save(RESULTS_DIR / f"baseline_logreg_c_{dim_label}.npy", np.asarray(baseline_params["c"]))
+        np.save(RESULTS_DIR / f"lr_init_pv_theta_{dim_label}.npy", np.asarray(pv_from_baseline_params["theta"]))
+        np.save(RESULTS_DIR / f"lr_init_pv_c_{dim_label}.npy", np.asarray(pv_from_baseline_params["c"]))
 
     # Final summary banner printout
     print("\n" + "=" * 65)
     print("            FINAL DIMENSION COMPARISON SUMMARY")
     print("=" * 65)
-    print(f"{'Representation':<25} | {'PV fixed thresh (%)':<18} | {'PV score (%)':<18} | {'Baseline PV score (%)':<22}")
-    print("-" * 65)
+    print(f"{'Representation':<25} | {'PV fixed thresh (%)':<18} | {'PV score (%)':<18} | {'LR-init PV score (%)':<22} | {'Baseline PV score (%)':<22}")
+    print("-" * 95)
     for name, metrics in results_summary.items():
-        print(f"{name:<25} | {metrics['pv_fixed_thresh']:18.2f} | {metrics['pv_score']:18.2f} | {metrics['baseline_pv_score']:22.2f}")
+        print(f"{name:<25} | {metrics['pv_fixed_thresh']:18.2f} | {metrics['pv_score']:18.2f} | {metrics['pv_from_baseline_score']:22.2f} | {metrics['baseline_pv_score']:22.2f}")
     print("=" * 65)
 
 

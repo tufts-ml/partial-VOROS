@@ -1,0 +1,588 @@
+ID,Filename,Objection,Annotation
+{1&318},{benign (1)&benign (318)},,text
+{2&319},{benign (2)&benign (319)},,overlay
+{3&320},{benign (3)&benign (320)},,text
+{4&321},{benign (4)&benign (321)},,text
+{5&322},{benign (5)&benign (322)},,measurement
+{6&323},{benign (6)&benign (323)},,measurement&doppler
+{7&324},{benign (7)&benign (324)}
+{8&325},{benign (8)&benign (325)}
+{9&326},{benign (9)&benign (326)},,measurement
+{10&327},{benign (10)&benign (327)}
+{11&328},{benign (11)&benign (328)},,measurement
+{12&329},{benign (12)&benign (329)}
+{13&330},{benign (13)&benign (330)},,doppler
+{14&331},{benign (14)&benign (331)},,measurement
+{15&332},{benign (15)&benign (332)}
+{16&151},{benign (16)&benign (151)}
+{17&425},{benign (17)&benign (425)}
+{18&152},{benign (18)&benign (152)}
+{19&150},{benign (19)&benign (150)},,text
+{20},{benign (20)}
+{21&154},{benign (21)&benign (154)}
+{22},{benign (22)},,measurement
+{23},{benign (23)}
+{24},{benign (24)}
+{25&153},{benign (25)&benign (153)}
+{26},{benign (26)}
+{27},{benign (27)}
+{28},{benign (28)}
+{29},{benign (29)}
+{30&128},{benign (30)&benign (128)}
+{31},{benign (31)}
+{32},{benign (32)}
+{33&130},{benign (33)&benign (130)}
+{34},{benign (34)},,text
+{35&177},{benign (35)&benign (177)}
+{36},{benign (36)}
+{37&127},{benign (37)&benign (127)}
+{38&132},{benign (38)&benign (132)}
+{39},{benign (39)}
+{40},{benign (40)}
+{41},{benign (41)}
+{42&131&488},{benign (42)&benign (131)&malignant (51)},multiclass
+{43},{benign (43)}
+{44&129},{benign (44)&benign (129)}
+{45},{benign (45)}
+{46},{benign (46)},,text
+{47},{benign (47)}
+{48},{benign (48)}
+{49},{benign (49)}
+{50&136},{benign (50)&benign (136)}
+{51&133},{benign (51)&benign (133)}
+{52&134},{benign (52)&benign (134)},,text
+{53},{benign (53)}
+{54},{benign (54)}
+{55},{benign (55)}
+{56},{benign (56)}
+{57},{benign (57)}
+{58&135},{benign (58)&benign (135)}
+{59},{benign (59)}
+{60&138},{benign (60)&benign (138)},,text
+{61&94&108&114&116&119&122},{benign (61)&benign (94)&benign (108)&benign (114)&benign (116)&benign (119)&benign (122)}
+{62&140},{benign (62)&benign (140)}
+{63},{benign (63)}
+{64&141},{benign (64)&benign (141)},,measurement
+{65&99&139&157},{benign (65)&benign (99)&benign (139)&benign (157)}
+{66},{benign (66)}
+{67},{benign (67)}
+{68},{benign (68)}
+{69},{benign (69)}
+{70},{benign (70)}
+{71},{benign (71)}
+{72},{benign (72)}
+{73},{benign (73)}
+{74},{benign (74)}
+{75},{benign (75)}
+{76},{benign (76)}
+{77},{benign (77)}
+{78},{benign (78)}
+{79},{benign (79)},,measurement
+{80},{benign (80)}
+{81&197},{benign (81)&benign (197)}
+{82},{benign (82)},,pictogram
+{83},{benign (83)}
+{84},{benign (84)}
+{85&164&489},{benign (85)&benign (164)&malignant (52)},multiclass
+{86&163},{benign (86)&benign (163)}
+{87},{benign (87)}
+{88},{benign (88)}
+{89},{benign (89)}
+{90},{benign (90)}
+{91},{benign (91)}
+{92},{benign (92)}
+{93},{benign (93)}
+{95},{benign (95)}
+{96&155},{benign (96)&benign (155)}
+{97},{benign (97)},,measurement
+{98},{benign (98)}
+{100},{benign (100)}
+{101},{benign (101)}
+{102},{benign (102)},,doppler
+{103},{benign (103)}
+{104},{benign (104)}
+{105&156},{benign (105)&benign (156)}
+{106},{benign (106)},axilla
+{107},{benign (107)}
+{109},{benign (109)}
+{110&158},{benign (110)&benign (158)}
+{111},{benign (111)}
+{112},{benign (112)},,measurement
+{113},{benign (113)}
+{115},{benign (115)},,measurement
+{117},{benign (117)}
+{118},{benign (118)}
+{120},{benign (120)}
+{121},{benign (121)}
+{123},{benign (123)},,measurement
+{124},{benign (124)}
+{125&126},{benign (125)&benign (126)}
+{137},{benign (137)}
+{142},{benign (142)}
+{143},{benign (143)}
+{144},{benign (144)}
+{145},{benign (145)}
+{146},{benign (146)}
+{147},{benign (147)}
+{148},{benign (148)}
+{149},{benign (149)}
+{159},{benign (159)}
+{160},{benign (160)}
+{161},{benign (161)}
+{162},{benign (162)}
+{165},{benign (165)}
+{166},{benign (166)},axilla
+{167},{benign (167)}
+{168},{benign (168)}
+{169},{benign (169)}
+{170},{benign (170)}
+{171},{benign (171)}
+{172},{benign (172)}
+{173},{benign (173)}
+{174},{benign (174)}
+{175},{benign (175)}
+{176},{benign (176)}
+{178},{benign (178)}
+{179},{benign (179)}
+{180},{benign (180)}
+{181},{benign (181)}
+{182},{benign (182)}
+{183},{benign (183)}
+{184},{benign (184)}
+{185},{benign (185)}
+{186},{benign (186)}
+{187},{benign (187)}
+{188},{benign (188)}
+{189},{benign (189)}
+{190},{benign (190)},,pictogram
+{191},{benign (191)}
+{192},{benign (192)}
+{193},{benign (193)}
+{194},{benign (194)}
+{195},{benign (195)},,text
+{196},{benign (196)},,text
+{198},{benign (198)},,text
+{199&248},{benign (199)&benign (248)},axilla,overlay
+{200&274&290},{benign (200)&benign (274)&benign (290)},,measurement&text
+{201&302},{benign (201)&benign (302)},,text
+{202&301},{benign (202)&benign (301)},,text
+{203&273&289},{benign (203)&benign (273)&benign (289)},,measurement&text
+{204&249&282},{benign (204)&benign (249)&benign (282)},,measurement&text
+{205&262},{benign (205)&benign (262)},axilla,text
+{206&303},{benign (206)&benign (303)},,measurement
+{207&256},{benign (207)&benign (256)},axilla,text
+{208&291},{benign (208)&benign (291)},,text
+{209&275&297},{benign (209)&benign (275)&benign (297)},,measurement&text
+{210&298},{benign (210)&benign (298)},axilla,overlay
+{211&254},{benign (211)&benign (254)},,text
+{212},{benign (212)},,text
+{213&253},{benign (213)&benign (253)},,measurement
+{214&260&281},{benign (214)&benign (260)&benign (281)},,measurement
+{215&270},{benign (215)&benign (270)},,measurement
+{216&265},{benign (216)&benign (265)},,measurement&pictogram
+{217&268},{benign (217)&benign (268)},axilla,measurement
+{218&296},{benign (218)&benign (296)},axilla,measurement
+{219&272},{benign (219)&benign (272)}
+{220&271},{benign (220)&benign (271)},,measurement
+{221&246},{benign (221)&benign (246)},,measurement
+{222&267},{benign (222)&benign (267)},,measurement
+{223&257},{benign (223)&benign (257)},axilla,text
+{224&304},{benign (224)&benign (304)},,text
+{225&292&293},{benign (225)&benign (292)&benign (293)},axilla,text
+{226&263&278},{benign (226)&benign (263)&benign (278)},,measurement&text
+{227&250},{benign (227)&benign (250)},,measurement&text
+{228&306},{benign (228)&benign (306)},axilla,overlay
+{229&259&280},{benign (229)&benign (259)&benign (280)},,measurement&text
+{230&252},{benign (230)&benign (252)},,measurement&text
+{231&295},{benign (231)&benign (295)},,measurement&text
+{232&276&287},{benign (232)&benign (276)&benign (287)},,measurement
+{233&299},{benign (233)&benign (299)},axilla
+{234&261},{benign (234)&benign (261)},,measurement&doppler
+{235&294},{benign (235)&benign (294)},axilla,text
+{236&247},{benign (236)&benign (247)},axilla,overlay
+{237&264},{benign (237)&benign (264)},,measurement&text
+{238&300},{benign (238)&benign (300)},,measurement&text
+{239&258},{benign (239)&benign (258)},,measurement&text
+{240&255&277},{benign (240)&benign (255)&benign (277)},,doppler&text
+{241&266&279},{benign (241)&benign (266)&benign (279)},,measurement&text
+{242&288},{benign (242)&benign (288)},,text
+{243},{benign (243)},axilla,text
+{244&251},{benign (244)&benign (251)},,measurement&text
+{245&305},{benign (245)&benign (305)},,measurement&text
+{269&648},{benign (269)&normal (1)},multiclass
+{283},{benign (283)}
+{284&285},{benign (284)&benign (285)},,measurement
+{286},{benign (286)},,measurement
+{307&419},{benign (307)&benign (419)}
+{308&424},{benign (308)&benign (424)}
+{309&422},{benign (309)&benign (422)},,text
+{310&423},{benign (310)&benign (423)}
+{311},{benign (311)}
+{312&421},{benign (312)&benign (421)}
+{313},{benign (313)}
+{314},{benign (314)}
+{315},{benign (315)}
+{316&426},{benign (316)&benign (426)},,measurement
+{317},{benign (317)}
+{333&514&515},{benign (333)&malignant (77)&malignant (78)},multiclass
+{334},{benign (334)},,text
+{335},{benign (335)}
+{336},{benign (336)}
+{337},{benign (337)}
+{338},{benign (338)}
+{339},{benign (339)}
+{340},{benign (340)}
+{341},{benign (341)}
+{342},{benign (342)}
+{343},{benign (343)},,text
+{344},{benign (344)}
+{345},{benign (345)},,text
+{346},{benign (346)}
+{347},{benign (347)}
+{348},{benign (348)}
+{349},{benign (349)}
+{350},{benign (350)}
+{351},{benign (351)}
+{352},{benign (352)}
+{353},{benign (353)}
+{354},{benign (354)}
+{355},{benign (355)}
+{356},{benign (356)}
+{357},{benign (357)}
+{358},{benign (358)}
+{359},{benign (359)},,measurement&text
+{360},{benign (360)}
+{361},{benign (361)}
+{362},{benign (362)},,text
+{363},{benign (363)}
+{364},{benign (364)}
+{365},{benign (365)}
+{366},{benign (366)},,measurement&text
+{367},{benign (367)},,text
+{368},{benign (368)}
+{369},{benign (369)}
+{370},{benign (370)}
+{371},{benign (371)}
+{372},{benign (372)}
+{373},{benign (373)},,measurement&text
+{374},{benign (374)},,measurement&text
+{375},{benign (375)}
+{376},{benign (376)}
+{377},{benign (377)}
+{378},{benign (378)}
+{379},{benign (379)}
+{380},{benign (380)},,text
+{381},{benign (381)}
+{382},{benign (382)},,pictogram
+{383},{benign (383)}
+{384},{benign (384)}
+{385},{benign (385)}
+{386},{benign (386)}
+{387},{benign (387)}
+{388},{benign (388)}
+{389},{benign (389)},,text
+{390},{benign (390)},,text
+{391},{benign (391)}
+{392},{benign (392)},,pictogram
+{393},{benign (393)},,measurement
+{394},{benign (394)}
+{395&411},{benign (395)&benign (411)}
+{396&413},{benign (396)&benign (413)}
+{397},{benign (397)},,text
+{398},{benign (398)}
+{399&530},{benign (399)&malignant (93)},multiclass
+{400&412},{benign (400)&benign (412)}
+{401},{benign (401)},,text
+{402},{benign (402)}
+{403},{benign (403)}
+{404&415},{benign (404)&benign (415)}
+{405},{benign (405)}
+{406&531},{benign (406)&malignant (94)},multiclass
+{407},{benign (407)},,overlay
+{408},{benign (408)},,overlay
+{409},{benign (409)},,text
+{410},{benign (410)},,overlay
+{414},{benign (414)}
+{416},{benign (416)},,text
+{417},{benign (417)}
+{418},{benign (418)}
+{420},{benign (420)}
+{427},{benign (427)},,measurement
+{428},{benign (428)},,measurement
+{429},{benign (429)}
+{430},{benign (430)}
+{431},{benign (431)}
+{432},{benign (432)},,measurement&text
+{433&582},{benign (433)&malignant (145)},multiclass,measurement
+{434},{benign (434)}
+{435},{benign (435)}
+{436},{benign (436)},,measurement
+{437&681},{benign (437)&normal (34)},multiclass
+{438},{malignant (1)}
+{439},{malignant (2)},,measurement&text
+{440},{malignant (3)}
+{441&442&443&444&445&446},{malignant (4)&malignant (5)&malignant (6)&malignant (7)&malignant (8)&malignant (9)}
+{447&549},{malignant (10)&malignant (112)},,measurement&text
+{448&550},{malignant (11)&malignant (113)},axilla,overlay
+{449&547},{malignant (12)&malignant (110)},axilla,measurement&text
+{450&546},{malignant (13)&malignant (109)},axilla,text
+{451&551&560},{malignant (14)&malignant (114)&malignant (123)},,measurement
+{452&548},{malignant (15)&malignant (111)},,measurement&text
+{453},{malignant (16)}
+{454&525},{malignant (17)&malignant (88)}
+{455&553},{malignant (18)&malignant (116)}
+{456},{malignant (19)}
+{457},{malignant (20)}
+{458},{malignant (21)}
+{459},{malignant (22)}
+{460},{malignant (23)}
+{461},{malignant (24)}
+{462},{malignant (25)}
+{463},{malignant (26)},,measurement
+{464&465},{malignant (27)&malignant (28)},axilla
+{466},{malignant (29)}
+{467},{malignant (30)}
+{468},{malignant (31)}
+{469},{malignant (32)}
+{470},{malignant (33)}
+{471&529},{malignant (34)&malignant (92)}
+{472},{malignant (35)}
+{473},{malignant (36)}
+{474},{malignant (37)}
+{475},{malignant (38)}
+{476&479},{malignant (39)&malignant (42)}
+{477},{malignant (40)}
+{478},{malignant (41)}
+{480},{malignant (43)}
+{481},{malignant (44)}
+{482},{malignant (45)}
+{483},{malignant (46)}
+{484},{malignant (47)}
+{485},{malignant (48)}
+{486},{malignant (49)}
+{487},{malignant (50)}
+{490},{malignant (53)},,measurement&overlay
+{491},{malignant (54)}
+{492},{malignant (55)}
+{493},{malignant (56)}
+{494},{malignant (57)}
+{495},{malignant (58)}
+{496},{malignant (59)}
+{497},{malignant (60)}
+{498},{malignant (61)},axilla,text
+{499},{malignant (62)}
+{500},{malignant (63)}
+{501},{malignant (64)}
+{502&503},{malignant (65)&malignant (66)}
+{504},{malignant (67)}
+{505},{malignant (68)}
+{506},{malignant (69)},needle
+{507},{malignant (70)},needle
+{508},{malignant (71)}
+{509},{malignant (72)}
+{510},{malignant (73)}
+{511},{malignant (74)}
+{512},{malignant (75)}
+{513},{malignant (76)}
+{516},{malignant (79)}
+{517&518},{malignant (80)&malignant (81)},,pictogram
+{519},{malignant (82)}
+{520},{malignant (83)},,measurement
+{521},{malignant (84)}
+{522&523},{malignant (85)&malignant (86)}
+{524},{malignant (87)}
+{526},{malignant (89)}
+{527},{malignant (90)}
+{528},{malignant (91)}
+{532&533&534},{malignant (95)&malignant (96)&malignant (97)}
+{535&536},{malignant (98)&malignant (99)}
+{537},{malignant (100)}
+{538},{malignant (101)}
+{539},{malignant (102)}
+{540},{malignant (103)},,measurement
+{541},{malignant (104)}
+{542},{malignant (105)}
+{543&544},{malignant (106)&malignant (107)}
+{545},{malignant (108)},axilla
+{552},{malignant (115)}
+{554},{malignant (117)}
+{555&556},{malignant (118)&malignant (119)},,measurement
+{557},{malignant (120)}
+{558},{malignant (121)},,measurement
+{559},{malignant (122)},,measurement
+{561},{malignant (124)},,measurement
+{562},{malignant (125)},,measurement
+{563},{malignant (126)},,measurement
+{564},{malignant (127)},,measurement
+{565&566},{malignant (128)&malignant (129)},,measurement
+{567},{malignant (130)},,measurement
+{568},{malignant (131)},,measurement
+{569},{malignant (132)},,measurement
+{570},{malignant (133)}
+{571},{malignant (134)}
+{572},{malignant (135)}
+{573},{malignant (136)}
+{574},{malignant (137)}
+{575},{malignant (138)}
+{576},{malignant (139)},,text
+{577},{malignant (140)},,text
+{578},{malignant (141)}
+{579},{malignant (142)}
+{580},{malignant (143)},,text
+{581},{malignant (144)}
+{583},{malignant (146)}
+{584},{malignant (147)}
+{585},{malignant (148)},axilla,text
+{586},{malignant (149)},axilla
+{587},{malignant (150)}
+{588},{malignant (151)}
+{589},{malignant (152)}
+{590},{malignant (153)},,pictogram
+{591},{malignant (154)}
+{592},{malignant (155)}
+{593},{malignant (156)}
+{594},{malignant (157)},,measurement
+{595},{malignant (158)}
+{596},{malignant (159)}
+{597},{malignant (160)}
+{598},{malignant (161)}
+{599},{malignant (162)}
+{600},{malignant (163)}
+{601},{malignant (164)}
+{602},{malignant (165)}
+{603},{malignant (166)}
+{604},{malignant (167)},axilla,text
+{605},{malignant (168)}
+{606},{malignant (169)},,measurement
+{607},{malignant (170)}
+{608},{malignant (171)}
+{609},{malignant (172)}
+{610},{malignant (173)},needle
+{611},{malignant (174)},needle
+{612},{malignant (175)}
+{613},{malignant (176)}
+{614},{malignant (177)}
+{615},{malignant (178)}
+{616},{malignant (179)}
+{617},{malignant (180)},axilla,text
+{618},{malignant (181)}
+{619},{malignant (182)},,text
+{620},{malignant (183)}
+{621},{malignant (184)}
+{622},{malignant (185)}
+{623},{malignant (186)}
+{624},{malignant (187)}
+{625},{malignant (188)},,pictogram
+{626},{malignant (189)}
+{627},{malignant (190)},needle
+{628},{malignant (191)}
+{629},{malignant (192)}
+{630},{malignant (193)}
+{631},{malignant (194)}
+{632},{malignant (195)}
+{633},{malignant (196)},,doppler
+{634},{malignant (197)}
+{635},{malignant (198)},,measurement&pictogram
+{636},{malignant (199)}
+{637},{malignant (200)},axilla
+{638},{malignant (201)},,text
+{639},{malignant (202)}
+{640},{malignant (203)}
+{641},{malignant (204)}
+{642},{malignant (205)},,text
+{643},{malignant (206)}
+{644},{malignant (207)},,text
+{645},{malignant (208)},,pictogram
+{646},{malignant (209)}
+{647},{malignant (210)}
+{649},{normal (2)},axilla
+{650},{normal (3)}
+{651},{normal (4)}
+{652&660},{normal (5)&normal (13)}
+{653},{normal (6)}
+{654},{normal (7)}
+{655},{normal (8)}
+{656},{normal (9)}
+{657},{normal (10)}
+{658},{normal (11)}
+{659},{normal (12)}
+{661},{normal (14)}
+{662},{normal (15)}
+{663},{normal (16)}
+{664},{normal (17)}
+{665},{normal (18)}
+{666&778},{normal (19)&normal (131)}
+{667&779},{normal (20)&normal (132)}
+{668&710&711},{normal (21)&normal (63)&normal (64)}
+{669&772},{normal (22)&normal (125)}
+{670&728},{normal (23)&normal (81)}
+{671&775},{normal (24)&normal (128)}
+{672&769},{normal (25)&normal (122)},,text
+{673&777},{normal (26)&normal (130)}
+{674&771},{normal (27)&normal (124)}
+{675&773},{normal (28)&normal (126)}
+{676&770},{normal (29)&normal (123)}
+{677&766},{normal (30)&normal (119)}
+{678&768},{normal (31)&normal (121)},,text
+{679&774},{normal (32)&normal (127)}
+{680&767},{normal (33)&normal (120)}
+{682&776},{normal (35)&normal (129)},needle
+{683},{normal (36)}
+{684},{normal (37)}
+{685&690&697&700},{normal (38)&normal (43)&normal (50)&normal (53)}
+{686&695&703},{normal (39)&normal (48)&normal (56)},axilla
+{687&693&706},{normal (40)&normal (46)&normal (59)}
+{688&691&694&708},{normal (41)&normal (44)&normal (47)&normal (61)}
+{689&692&696&709},{normal (42)&normal (45)&normal (49)&normal (62)},axilla
+{698&699&701},{normal (51)&normal (52)&normal (54)}
+{702&704&714&715},{normal (55)&normal (57)&normal (67)&normal (68)}
+{705&707&716},{normal (58)&normal (60)&normal (69)},axilla
+{712},{normal (65)}
+{713},{normal (66)}
+{717},{normal (70)}
+{718},{normal (71)}
+{719},{normal (72)}
+{720},{normal (73)}
+{721},{normal (74)}
+{722},{normal (75)},axilla
+{723},{normal (76)}
+{724},{normal (77)},,text
+{725},{normal (78)}
+{726},{normal (79)}
+{727},{normal (80)}
+{729},{normal (82)}
+{730},{normal (83)},axilla
+{731},{normal (84)}
+{732},{normal (85)},axilla
+{733},{normal (86)}
+{734},{normal (87)}
+{735},{normal (88)}
+{736},{normal (89)}
+{737},{normal (90)},axilla
+{738},{normal (91)},axilla
+{739},{normal (92)},axilla
+{740},{normal (93)},axilla
+{741},{normal (94)},axilla
+{742},{normal (95)}
+{743},{normal (96)}
+{744&745},{normal (97)&normal (98)},axilla
+{746},{normal (99)}
+{747},{normal (100)},axilla
+{748},{normal (101)},axilla
+{749},{normal (102)}
+{750},{normal (103)}
+{751&754},{normal (104)&normal (107)},axilla
+{752},{normal (105)}
+{753},{normal (106)}
+{755},{normal (108)}
+{756},{normal (109)}
+{757},{normal (110)},axilla
+{758},{normal (111)}
+{759},{normal (112)}
+{760},{normal (113)},,pictogram
+{761},{normal (114)},,pictogram
+{762},{normal (115)}
+{763},{normal (116)}
+{764},{normal (117)}
+{765},{normal (118)},axilla,pictogram
+{780},{normal (133)}
