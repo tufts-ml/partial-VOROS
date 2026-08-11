@@ -4,6 +4,43 @@ import _geometry_jax
 import jax.numpy as jnp
 import jax
 
+def voros_score(y_true, y_pred, min_fp_cost_ratio, max_fp_cost_ratio,
+                 n_points=1000):
+    """Partial VOROS score with precision and capacity constraints.
+
+    Returns
+    -------
+    float : pVOROS score in [0, 1]
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    P = int(np.sum(y_true == 1))
+    N = int(np.sum(y_true == 0))
+    n = len(y_true)
+
+    if P == 0 or N == 0:
+        return 0.0
+
+    fprs, tprs, _ = roc_curve(y_true, y_pred)
+    
+    # Cast to JAX arrays
+    j_fprs = jnp.asarray(fprs, dtype=jnp.float64)
+    j_tprs = jnp.asarray(tprs, dtype=jnp.float64)
+
+    voros_val = _geometry_jax.voros_jax(
+        j_fprs, 
+        j_tprs, 
+        float(P + N), 
+        1e-8, 
+        P, 
+        N,
+        min_fp_cost_ratio, 
+        max_fp_cost_ratio, 
+        n_points
+    )
+
+    return float(voros_val)
+
 def pvoros_score(y_true, y_pred, alpha, kappa_frac, min_fp_cost_ratio, max_fp_cost_ratio,
                  n_points=1000):
     """Partial VOROS score with precision and capacity constraints.

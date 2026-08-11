@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 script_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(script_dir) 
 sys.path.append(parent_dir)
-from metrics_jax import pvoros_score
+from metrics_jax import voros_score as voros_score_jax
 from metrics import voros_score
 
 # DATA_DIR = '/cluster/tufts/hugheslab/datasets/BUSI'
@@ -143,10 +143,12 @@ if __name__=='__main__':
     print('test : %.3f' % test_auc)
 
     print("VOROS score on final best estimator (after refit)")
-    print('train : %.3f' % pvoros_score(
-            ytrue_tr_M, yproba1_tr_M, 1e-6, 1.0, 0, 1e6))
-    print('test : %.3f' % pvoros_score(
-            ytrue_te_N, yproba1_te_N, 1e-6, 1.0, 0, 1e6))
+    print('metrics.py train : %.12f' % voros_score(ytrue_tr_M, yproba1_tr_M, 0.0, 1e6))
+    print('metrics_jax.py train : %.12f' % voros_score_jax(
+            ytrue_tr_M, yproba1_tr_M, 0.0, 1e6))
+    print('metrics.py test : %.12f' % voros_score(ytrue_te_N, yproba1_te_N, 0.0, 1e6))
+    print('metrics_jax.py test : %.12f' % voros_score_jax(
+            ytrue_te_N, yproba1_te_N, 0.0, 1e6))
 
     # --- Plotting the ROC Curve ---
     fpr_tr, tpr_tr, _ = roc_curve(ytrue_tr_M, yproba1_tr_M)
