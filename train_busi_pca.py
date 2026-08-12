@@ -73,16 +73,16 @@ def init_params(key, dim):
     }
 
 
-def compute_pvoros_metric(params, feats_jax, labels_np, alpha=0.27, n_points=1000):
+def compute_pvoros_metric(params, feats_jax, labels_np, alpha, kappa_frac, min_fp, max_fp, n_points=1000):
     logits = jnp.dot(feats_jax, params["w"]) + params["b"]
     y_pred = jax.nn.sigmoid(logits)
     score = pvoros_score(
         y_true=labels_np,
         y_pred=y_pred,
         alpha=alpha,
-        kappa_frac=0.5,
-        min_fp_cost_ratio=1/9,
-        max_fp_cost_ratio=1/6,
+        kappa_frac=kappa_frac,
+        min_fp_cost_ratio=min_fp,
+        max_fp_cost_ratio=max_fp,
         n_points=n_points
     )
     return float(score)
@@ -141,7 +141,7 @@ def plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=None, x_min=0.
                 ax.plot(x_vals, y_vals, linestyle=':', color=color, alpha=alpha)
 
 
-def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce_init, dataset_name, results_dir, alpha=0.27):
+def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce_init, dataset_name, results_dir, alpha, kappa_frac, min_fp, max_fp):
     """Plots empirical ROC with alpha and kappa feasible bounds and iso-performance lines."""
     y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
     y_pred_pv_jax = jnp.asarray(y_pred_pv, dtype=jnp.float64)
@@ -161,7 +161,7 @@ def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce
     prevalence = P / (P + N)
     alpha_slope = alpha * (1 - prevalence) / (prevalence * (1 - alpha))
     kappa_slope = -(N / P)
-    kappa_plot = 0.5 * (P + N)
+    kappa_plot = kappa_frac * (P + N)
 
     feasible_mask = np.array([
         _geometry_jax.keep_model(float(fpr), float(tpr), alpha, kappa_plot, N, P)
@@ -183,7 +183,7 @@ def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce
     ax.plot(fpr_grid, tpr_alpha_bound, color='#d62728', linestyle='--', lw=2.0, label=f'Alpha Bound (slope={alpha_slope:.2f})')
     ax.plot(fpr_grid, tpr_kappa_bound, color='#2ca02c', linestyle='--', lw=2.0, label=f'Kappa Bound (slope={kappa_slope:.2f})')
 
-    fp_cost_ratios = np.linspace(1/9, 1/6, 5)
+    fp_cost_ratios = np.linspace(min_fp, max_fp, 5)
     plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=fp_cost_ratios, x_min=0.0, x_max=1.0, color='black', alpha=0.12)
 
     y_lower_clamped = np.clip(tpr_alpha_bound, 0.0, 1.0)
@@ -216,7 +216,7 @@ def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce
 # ---------------------------------------------------------------------------
 # 3. Full-Batch Optimization Pipelines
 # ---------------------------------------------------------------------------
-def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0, n_restarts=1, inits_per_seed=10):
+def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR, seed=0, n_restarts=1, inits_per_seed=10):
     """Method 1: Full-batch Soft PV Loss from Random Initializations."""
     x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
     x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
@@ -228,8 +228,7 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0
 
     P_tr, N_tr = jnp.sum(y_tr == 1.0), jnp.sum(y_tr == 0.0)
     P_va, N_va = jnp.sum(y_va == 1.0), jnp.sum(y_va == 0.0)
-    kappa_tr, kappa_va = 0.5 * (P_tr + N_tr), 0.5 * (P_va + N_va)
-    alpha, min_fp, max_fp = 0.27, 1 / 9, 1 / 6
+    kappa_tr, kappa_va = kappa_frac * (P_tr + N_tr), kappa_frac * (P_va + N_va)
 
     def pure_loss_fn(p):
         return pv_loss_fixed_thresh(p, x_tr, y_tr, P_tr, N_tr, kappa_tr, alpha, min_fp, max_fp)
@@ -260,8 +259,8 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0
 
             # Compute true pVOROS score every 10 epochs
             if ep % 10 == 0 or ep == 1:
-                tr_pv = compute_pvoros_metric(params, x_tr, y_train)
-                va_pv = compute_pvoros_metric(params, x_va, y_val)
+                tr_pv = compute_pvoros_metric(params, x_tr, y_train, alpha, kappa_frac, min_fp, max_fp)
+                va_pv = compute_pvoros_metric(params, x_va, y_val, alpha, kappa_frac, min_fp, max_fp)
                 train_pvoros_hist.append((ep, tr_pv))
                 val_pvoros_hist.append((ep, va_pv))
 
@@ -304,7 +303,7 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0
     return best_overall_params, all_trace_histories
 
 
-def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_params, epochs=EPOCHS, lr=LR):
+def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_params, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR):
     """Method 2: Full-batch Soft PV Loss starting from BCE Initializer."""
     x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
     x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
@@ -316,8 +315,7 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
 
     P_tr, N_tr = jnp.sum(y_tr == 1.0), jnp.sum(y_tr == 0.0)
     P_va, N_va = jnp.sum(y_va == 1.0), jnp.sum(y_va == 0.0)
-    kappa_tr, kappa_va = 0.5 * (P_tr + N_tr), 0.5 * (P_va + N_va)
-    alpha, min_fp, max_fp = 0.27, 1 / 9, 1 / 6
+    kappa_tr, kappa_va = kappa_frac * (P_tr + N_tr), kappa_frac * (P_va + N_va)
 
     def pure_loss_fn(p):
         return pv_loss_fixed_thresh(p, x_tr, y_tr, P_tr, N_tr, kappa_tr, alpha, min_fp, max_fp)
@@ -348,8 +346,8 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
         val_losses.append(va_loss)
 
         if ep % 10 == 0 or ep == 1:
-            tr_pv = compute_pvoros_metric(params, x_tr, y_train)
-            va_pv = compute_pvoros_metric(params, x_va, y_val)
+            tr_pv = compute_pvoros_metric(params, x_tr, y_train, alpha, kappa_frac, min_fp, max_fp)
+            va_pv = compute_pvoros_metric(params, x_va, y_val, alpha, kappa_frac, min_fp, max_fp)
             train_pvoros_hist.append((ep, tr_pv))
             val_pvoros_hist.append((ep, va_pv))
 
@@ -370,7 +368,7 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
     return best_params, history
 
 
-def train_baseline_bce_methods(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=1e-2):
+def train_baseline_bce_methods(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=1e-2):
     """Methods 3 & 4: Full-batch BCE Training extracting both checkpointing strategies."""
     x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
     x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
@@ -409,8 +407,8 @@ def train_baseline_bce_methods(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr
 
         # Save params based on best val PV (every 10 epoch)
         if ep % 10 == 0 or ep == 1:
-            tr_pv = compute_pvoros_metric(params, x_tr, y_train)
-            va_pv = compute_pvoros_metric(params, x_va, y_val)
+            tr_pv = compute_pvoros_metric(params, x_tr, y_train, alpha, kappa_frac, min_fp, max_fp)
+            va_pv = compute_pvoros_metric(params, x_va, y_val, alpha, kappa_frac, min_fp, max_fp)
             train_pvoros_hist.append((ep, tr_pv))
             val_pvoros_hist.append((ep, va_pv))
 
@@ -530,22 +528,27 @@ def main():
 
     results_summary = {}
 
+    alpha = 0.6
+    kappa_frac = 0.5
+    min_fp = 1/9
+    max_fp = 1/6
+
     for name, (X_train, X_val, X_test) in datasets.items():
         print("\n" + "=" * 65)
         print(f"        RUNNING EXPERIMENT: {name}")
         print("=" * 65)
 
         # 1. Method 1: Soft PV Loss (Random Initializations)
-        pv_rand_params, pv_rand_histories = train_logreg_pv(X_train, y_train, X_val, y_val, n_restarts=1)
+        pv_rand_params, pv_rand_histories = train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, n_restarts=1)
 
         # 2. Methods 3 & 4: Standard BCE Training
         bce_std_params, bce_monitored_params, bce_history = train_baseline_bce_methods(
-            X_train, y_train, X_val, y_val, epochs=EPOCHS
+            X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR
         )
 
         # 3. Method 2: Soft PV Loss (BCE Checkpoint Initializer)
         pv_bce_params, pv_bce_history = train_logreg_pv_from_bce_init(
-            X_train, y_train, X_val, y_val, bce_std_params, epochs=EPOCHS, lr=LR
+            X_train, y_train, X_val, y_val, bce_std_params, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR
         )
 
         # 4. Generate Training Trace Plots
@@ -564,15 +567,15 @@ def main():
             y_pred_pv_bce_init=np.asarray(pv_bce_init_preds),
             dataset_name=name,
             results_dir=RESULTS_DIR,
-            alpha=0.27
+            alpha=alpha, kappa_frac=kappa_frac, min_fp=min_fp, max_fp=max_fp
         )
 
         # 6. Evaluate TEST Set pVOROS metrics for ALL 4 METHODS
         x_test_jax = jnp.asarray(X_test, dtype=jnp.float64)
-        pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test)
-        pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test)
-        bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test)
-        bce_monitored_test_score = compute_pvoros_metric(bce_monitored_params, x_test_jax, y_test)
+        pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        bce_monitored_test_score = compute_pvoros_metric(bce_monitored_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
 
         results_summary[name] = {
             "pv_rand_test": float(pv_rand_test_score) * 100,
