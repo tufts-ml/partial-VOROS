@@ -3,7 +3,6 @@ import jax
 import jax.numpy as jnp
 import optax
 import matplotlib.pyplot as plt
-import pandas as pd
 import torch
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
@@ -22,7 +21,7 @@ VAL_FRACTION = 0.20
 TEST_FRACTION = 0.20
 SPLIT_SEED = 0
 
-LR = 1e-3
+LR = 1e-4
 EPOCHS = 100
 
 
@@ -97,14 +96,130 @@ def bce_loss_fn(p, x, y):
 
 
 # ---------------------------------------------------------------------------
-# 2. Training Pipelines
+# 2. Geometry & ROC Feasible Bound Plot Helpers
+# ---------------------------------------------------------------------------
+def convex_hull_roc(fprs, tprs):
+    points = np.column_stack((fprs, tprs))
+    hull = []
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - a[1]) - (a[1] - o[1]) * (b[0] - a[0])
+
+    for pt in points:
+        while len(hull) >= 2 and cross(hull[-2], hull[-1], pt) >= 0:
+            hull.pop()
+        hull.append(pt)
+
+    return np.asarray(hull)
+
+
+def plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=None, x_min=0.0, x_max=1.0, color='gray', alpha=0.2):
+    if hull_pts.shape[0] == 0:
+        return
+
+    if fp_cost_ratios is None:
+        fp_cost_ratios = np.linspace(0.05, 0.95, 5)
+
+    x_vals = np.linspace(x_min, x_max, 200)
+
+    for r in fp_cost_ratios:
+        t = float(_geometry_jax.ratio_to_t(r, P, N))
+        for h, k in hull_pts:
+            a_j, b_j, c_j = _geometry_jax._iso_performance_line(h, k, t)
+            a, b, c = float(a_j), float(b_j), float(c_j)
+
+            if abs(b) < 1e-12:
+                if abs(a) < 1e-12:
+                    continue
+                x_line = float(c / a)
+                if x_line < x_min or x_line > x_max:
+                    continue
+                ax.plot([x_line, x_line], [0.0, 1.0], linestyle=':', color=color, alpha=alpha)
+            else:
+                y_vals = (c - a * x_vals) / b
+                y_vals = np.clip(y_vals, 0.0, 1.0)
+                ax.plot(x_vals, y_vals, linestyle=':', color=color, alpha=alpha)
+
+
+def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce_init, dataset_name, results_dir, alpha=0.27):
+    """Plots empirical ROC with alpha and kappa feasible bounds and iso-performance lines."""
+    y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
+    y_pred_pv_jax = jnp.asarray(y_pred_pv, dtype=jnp.float64)
+
+    fprs_emp, tprs_emp, _ = roc_curve(y_val, y_pred_pv)
+    fprs_emp_bce, tprs_emp_bce, _ = roc_curve(y_val, y_pred_bce_monitored)
+    fprs_emp_pv_bce_init, tprs_emp_pv_bce_init, _ = roc_curve(y_val, y_pred_pv_bce_init)
+
+    soft_fprs, soft_tprs, _ = soft_roc_fixed_thresholds(y_val_jax, y_pred_pv_jax, temp=0.02)
+    soft_fprs = np.clip(np.asarray(soft_fprs, dtype=float), 0.0, 1.0)
+    soft_tprs = np.clip(np.asarray(soft_tprs, dtype=float), 0.0, 1.0)
+    sort_idx = np.argsort(soft_fprs)
+    soft_fprs, soft_tprs = soft_fprs[sort_idx], soft_tprs[sort_idx]
+
+    P = int(np.sum(y_val == 1))
+    N = int(np.sum(y_val == 0))
+    prevalence = P / (P + N)
+    alpha_slope = alpha * (1 - prevalence) / (prevalence * (1 - alpha))
+    kappa_slope = -(N / P)
+    kappa_plot = 0.5 * (P + N)
+
+    feasible_mask = np.array([
+        _geometry_jax.keep_model(float(fpr), float(tpr), alpha, kappa_plot, N, P)
+        for fpr, tpr in zip(fprs_emp, tprs_emp)
+    ], dtype=bool)
+
+    hull_pts = convex_hull_roc(fprs_emp[feasible_mask], tprs_emp[feasible_mask])
+
+    fpr_grid = np.linspace(0.0, 1.0, 200)
+    tpr_alpha_bound = alpha_slope * fpr_grid
+    tpr_kappa_bound = kappa_slope * fpr_grid + (kappa_plot / P)
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.plot(fprs_emp, tprs_emp, color='#1f77b4', lw=2.5, label='PV ROC (discrete)')
+    ax.plot(soft_fprs, soft_tprs, color='#ff7f0e', lw=2.0, label='PV ROC (smooth)')
+    ax.plot(fprs_emp_bce, tprs_emp_bce, color='#9467bd', lw=2.0, linestyle='-.', label='BCE Monitored ROC')
+    ax.plot(fprs_emp_pv_bce_init, tprs_emp_pv_bce_init, color="#51b9b9", lw=2.0, linestyle='-.', label='PV BCE init ROC')
+    ax.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=1.2, label='Chance Baseline')
+    ax.plot(fpr_grid, tpr_alpha_bound, color='#d62728', linestyle='--', lw=2.0, label=f'Alpha Bound (slope={alpha_slope:.2f})')
+    ax.plot(fpr_grid, tpr_kappa_bound, color='#2ca02c', linestyle='--', lw=2.0, label=f'Kappa Bound (slope={kappa_slope:.2f})')
+
+    fp_cost_ratios = np.linspace(1/9, 1/6, 5)
+    plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=fp_cost_ratios, x_min=0.0, x_max=1.0, color='black', alpha=0.12)
+
+    y_lower_clamped = np.clip(tpr_alpha_bound, 0.0, 1.0)
+    y_upper_clamped = np.clip(tpr_kappa_bound, 0.0, 1.0)
+    ax.fill_between(
+        fpr_grid, y_lower_clamped, y_upper_clamped,
+        where=(y_upper_clamped >= y_lower_clamped),
+        color='#ff7f0e', alpha=0.18, label='Feasible Region'
+    )
+
+    if hull_pts.shape[0] > 0:
+        ax.scatter(hull_pts[:, 0], hull_pts[:, 1], color='black', s=30, zorder=5, label='ROC Hull Points')
+
+    ax.set_xlim([-0.02, 1.02])
+    ax.set_ylim([-0.02, 1.02])
+    ax.set_xlabel('False Positive Rate (FPR)', fontsize=12)
+    ax.set_ylabel('True Positive Rate (TPR)', fontsize=12)
+    ax.set_title(f'ROC with Alpha/Kappa Bounds: {dataset_name}', fontsize=13)
+    ax.grid(True, linestyle=':', alpha=0.5)
+    ax.legend(loc='lower right', frameon=True, facecolor='white', framealpha=0.9)
+    fig.tight_layout()
+
+    filename_safe = dataset_name.replace(" ", "_").replace("/", "_").replace("(", "").replace(")", "").replace("%", "")
+    plot_name = results_dir / f'roc_bounds_{filename_safe}.pdf'
+    fig.savefig(plot_name, format='pdf', dpi=300)
+    plt.close(fig)
+    print(f"Saved ROC bounds plot: {plot_name}")
+
+
+# ---------------------------------------------------------------------------
+# 3. Full-Batch Optimization Pipelines
 # ---------------------------------------------------------------------------
 def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0, n_restarts=1, inits_per_seed=10):
-    """Method 1: PV Loss from Random Initializations."""
-    x_tr = jnp.asarray(X_train, dtype=jnp.float64)
-    y_tr = jnp.asarray(y_train, dtype=jnp.float64)
-    x_va = jnp.asarray(X_val, dtype=jnp.float64)
-    y_va = jnp.asarray(y_val, dtype=jnp.float64)
+    """Method 1: Full-batch Soft PV Loss from Random Initializations."""
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -114,8 +229,7 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0
     P_tr, N_tr = jnp.sum(y_tr == 1.0), jnp.sum(y_tr == 0.0)
     P_va, N_va = jnp.sum(y_va == 1.0), jnp.sum(y_va == 0.0)
     kappa_tr, kappa_va = 0.5 * (P_tr + N_tr), 0.5 * (P_va + N_va)
-    alpha = 0.27
-    min_fp, max_fp = 1 / 9, 1 / 6
+    alpha, min_fp, max_fp = 0.27, 1 / 9, 1 / 6
 
     def pure_loss_fn(p):
         return pv_loss_fixed_thresh(p, x_tr, y_tr, P_tr, N_tr, kappa_tr, alpha, min_fp, max_fp)
@@ -144,12 +258,14 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0
             train_losses.append(float(tr_loss))
             val_losses.append(float(va_loss))
 
+            # Compute true pVOROS score every 10 epochs
             if ep % 10 == 0 or ep == 1:
                 tr_pv = compute_pvoros_metric(params, x_tr, y_train)
                 va_pv = compute_pvoros_metric(params, x_va, y_val)
                 train_pvoros_hist.append((ep, tr_pv))
                 val_pvoros_hist.append((ep, va_pv))
 
+                # Save best val PV checkpoint
                 if va_pv > best_val_pvoros:
                     best_val_pvoros = va_pv
                     best_params = params
@@ -179,6 +295,7 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0
             all_trace_histories.append({"seed": run_seed, "init_idx": init_idx, "history": history})
             print(f"  └─ Init {init_idx + 1:2d}/{inits_per_seed} -> Best Val pVOROS: {best_val_pv:.4f}")
 
+            # Save best val PV checkpoint OVERALL
             if best_val_pv > best_overall_val_pvoros:
                 best_overall_val_pvoros = best_val_pv
                 best_overall_params = params
@@ -188,11 +305,9 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, seed=0
 
 
 def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_params, epochs=EPOCHS, lr=LR):
-    """Method 2: PV Loss starting from BCE Initializer."""
-    x_tr = jnp.asarray(X_train, dtype=jnp.float64)
-    y_tr = jnp.asarray(y_train, dtype=jnp.float64)
-    x_va = jnp.asarray(X_val, dtype=jnp.float64)
-    y_va = jnp.asarray(y_val, dtype=jnp.float64)
+    """Method 2: Full-batch Soft PV Loss starting from BCE Initializer."""
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -202,12 +317,13 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
     P_tr, N_tr = jnp.sum(y_tr == 1.0), jnp.sum(y_tr == 0.0)
     P_va, N_va = jnp.sum(y_va == 1.0), jnp.sum(y_va == 0.0)
     kappa_tr, kappa_va = 0.5 * (P_tr + N_tr), 0.5 * (P_va + N_va)
-    alpha = 0.27
-    min_fp, max_fp = 1 / 9, 1 / 6
+    alpha, min_fp, max_fp = 0.27, 1 / 9, 1 / 6
 
     def pure_loss_fn(p):
         return pv_loss_fixed_thresh(p, x_tr, y_tr, P_tr, N_tr, kappa_tr, alpha, min_fp, max_fp)
 
+
+    # Initialize with BCE params
     params = {
         "w": jnp.asarray(bce_init_params["w"], dtype=jnp.float64),
         "b": jnp.asarray(bce_init_params["b"], dtype=jnp.float64),
@@ -237,6 +353,8 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
             train_pvoros_hist.append((ep, tr_pv))
             val_pvoros_hist.append((ep, va_pv))
 
+
+            # Save best val PV checkpoint
             if va_pv > best_val_pvoros:
                 best_val_pvoros = va_pv
                 best_params = params
@@ -253,17 +371,9 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
 
 
 def train_baseline_bce_methods(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=1e-2):
-    """Methods 3 & 4: Trains BCE model and extracts BOTH checkpointing strategies.
-    
-    Returns:
-      - best_bce_params: Method 3 (Standard BCE checkpointed on Best Val BCE Loss)
-      - best_pvoros_params: Method 4 (BCE checkpointed on Best Val pVOROS Score)
-      - history: Training curves and pVOROS traces
-    """
-    x_tr = jnp.asarray(X_train, dtype=jnp.float64)
-    y_tr = jnp.asarray(y_train, dtype=jnp.float64)
-    x_va = jnp.asarray(X_val, dtype=jnp.float64)
-    y_va = jnp.asarray(y_val, dtype=jnp.float64)
+    """Methods 3 & 4: Full-batch BCE Training extracting both checkpointing strategies."""
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -292,12 +402,12 @@ def train_baseline_bce_methods(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr
         train_bce_losses.append(float(tr_bce_loss))
         val_bce_losses.append(va_bce_loss)
 
-        # Checkpoint Method 3: Best Validation BCE Loss
+        # Save params based on best val BCE 
         if va_bce_loss < best_val_bce_loss:
             best_val_bce_loss = va_bce_loss
             best_bce_params = params
 
-        # Evaluate and Checkpoint Method 4: Best Validation pVOROS Score every 10 epochs
+        # Save params based on best val PV (every 10 epoch)
         if ep % 10 == 0 or ep == 1:
             tr_pv = compute_pvoros_metric(params, x_tr, y_train)
             va_pv = compute_pvoros_metric(params, x_va, y_val)
@@ -322,7 +432,7 @@ def train_baseline_bce_methods(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr
 
 
 # ---------------------------------------------------------------------------
-# 3. Plotting Traces
+# 4. Plot Training Traces
 # ---------------------------------------------------------------------------
 def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, dataset_name, results_dir):
     """Plot Soft PV Loss (best random init + BCE init) and true pVOROS evaluation traces across epochs."""
@@ -331,7 +441,6 @@ def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, 
 
     fig, (ax_loss, ax_score) = plt.subplots(1, 2, figsize=(16, 6))
 
-    # Identify the single best random initialization run based on validation pVOROS performance
     best_overall_val_pv = -float("inf")
     best_run_idx = 0
     for idx, run in enumerate(pv_random_histories):
@@ -344,25 +453,11 @@ def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, 
     # ------------------------------------------------------------------
     # Left Panel: Soft Partial VOROS Loss Traces (Best Random Init + BCE Init)
     # ------------------------------------------------------------------
-    # 1. Best Random Init PV Loss (Train vs. Val)
-    ax_loss.plot(
-        epochs_range, best_random_run["train_losses"],
-        color='#1f77b4', lw=2.0, label='Best PV Random Init Train Loss'
-    )
-    ax_loss.plot(
-        epochs_range, best_random_run["val_losses"],
-        color='#1f77b4', linestyle='--', lw=2.0, label='Best PV Random Init Val Loss'
-    )
+    ax_loss.plot(epochs_range, best_random_run["train_losses"], color='#1f77b4', lw=2.0, label='Best PV Random Init Train Loss')
+    ax_loss.plot(epochs_range, best_random_run["val_losses"], color='#1f77b4', linestyle='--', lw=2.0, label='Best PV Random Init Val Loss')
 
-    # 2. Soft PV Loss from BCE Initialization
-    ax_loss.plot(
-        epochs_range, pv_bce_init_history["train_losses"],
-        color='#9467bd', lw=2.0, label='PV (BCE Init) Train Loss'
-    )
-    ax_loss.plot(
-        epochs_range, pv_bce_init_history["val_losses"],
-        color='#9467bd', linestyle='--', lw=2.0, label='PV (BCE Init) Val Loss'
-    )
+    ax_loss.plot(epochs_range, pv_bce_init_history["train_losses"], color='#9467bd', lw=2.0, label='PV (BCE Init) Train Loss')
+    ax_loss.plot(epochs_range, pv_bce_init_history["val_losses"], color='#9467bd', linestyle='--', lw=2.0, label='PV (BCE Init) Val Loss')
 
     ax_loss.set_xlabel('Epoch', fontsize=12)
     ax_loss.set_ylabel('Soft Partial VOROS Loss', fontsize=12)
@@ -373,19 +468,16 @@ def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, 
     # ------------------------------------------------------------------
     # Right Panel: True Empirical pVOROS Score Traces (Every 10 Epochs)
     # ------------------------------------------------------------------
-    # 1. Best PV Random Init
     tr_eps, tr_pvs = zip(*best_random_run["train_pvoros"])
     va_eps, va_pvs = zip(*best_random_run["val_pvoros"])
     ax_score.plot(tr_eps, tr_pvs, color='#2ca02c', marker='o', lw=2.0, label='PV Random Init Train pVOROS')
     ax_score.plot(va_eps, va_pvs, color='#2ca02c', marker='s', linestyle='--', lw=2.0, label='PV Random Init Val pVOROS')
 
-    # 2. PV (BCE Init)
     bce_pv_tr_eps, bce_pv_tr_pvs = zip(*pv_bce_init_history["train_pvoros"])
     bce_pv_va_eps, bce_pv_va_pvs = zip(*pv_bce_init_history["val_pvoros"])
     ax_score.plot(bce_pv_tr_eps, bce_pv_tr_pvs, color='#8c564b', marker='^', lw=2.0, label='PV (BCE Init) Train pVOROS')
     ax_score.plot(bce_pv_va_eps, bce_pv_va_pvs, color='#8c564b', marker='v', linestyle='--', lw=2.0, label='PV (BCE Init) Val pVOROS')
 
-    # 3. BCE Baseline (Monitored pVOROS trajectory)
     bce_tr_eps, bce_tr_pvs = zip(*bce_history["train_pvoros"])
     bce_va_eps, bce_va_pvs = zip(*bce_history["val_pvoros"])
     ax_score.plot(bce_tr_eps, bce_tr_pvs, color='#d62728', marker='D', lw=1.8, linestyle=':', label='BCE Baseline Train pVOROS')
@@ -401,11 +493,11 @@ def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, 
     plot_path = results_dir / f'loss_pvoros_traces_{filename_safe}.pdf'
     fig.savefig(plot_path, format='pdf', dpi=300)
     plt.close(fig)
-    print(f"Saved cleaned trace plot: {plot_path}")
+    print(f"Saved trace plot: {plot_path}")
 
 
 # ---------------------------------------------------------------------------
-# 4. Main Experiment Pipeline
+# 5. Main Experiment Pipeline
 # ---------------------------------------------------------------------------
 def main():
     all_feats, all_labels = load_embeddings_and_labels(DATA_DIR)
@@ -443,26 +535,40 @@ def main():
         print(f"        RUNNING EXPERIMENT: {name}")
         print("=" * 65)
 
-        # Method 1: Soft PV Loss (Random Initializations)
+        # 1. Method 1: Soft PV Loss (Random Initializations)
         pv_rand_params, pv_rand_histories = train_logreg_pv(X_train, y_train, X_val, y_val, n_restarts=1)
 
-        # Methods 3 & 4: Standard BCE Training (returns both BCE-loss checkpoint & PV-monitored checkpoint)
+        # 2. Methods 3 & 4: Standard BCE Training
         bce_std_params, bce_monitored_params, bce_history = train_baseline_bce_methods(
             X_train, y_train, X_val, y_val, epochs=EPOCHS
         )
 
-        # Method 2: Soft PV Loss (BCE Checkpoint Initializer)
+        # 3. Method 2: Soft PV Loss (BCE Checkpoint Initializer)
         pv_bce_params, pv_bce_history = train_logreg_pv_from_bce_init(
             X_train, y_train, X_val, y_val, bce_std_params, epochs=EPOCHS, lr=LR
         )
 
-        # Plot traces across all dynamic approaches
+        # 4. Generate Training Trace Plots
         plot_training_traces(pv_rand_histories, pv_bce_history, bce_history, name, RESULTS_DIR)
 
-        # Convert Test inputs to JAX
-        x_test_jax = jnp.asarray(X_test, dtype=jnp.float64)
+        # 5. Generate ROC Curve Plot with Feasible Region and Iso-performance Lines
+        x_val_jax = jnp.asarray(X_val, dtype=jnp.float64)
+        pv_rand_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_rand_params["w"]) + pv_rand_params["b"])
+        bce_monitored_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, bce_monitored_params["w"]) + bce_monitored_params["b"])
+        pv_bce_init_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_bce_params["w"]) + pv_bce_params["b"])
 
-        # Compute TEST pVOROS metrics for ALL 4 METHODS
+        plot_roc_bounds_figure(
+            y_val=y_val,
+            y_pred_pv=np.asarray(pv_rand_val_preds),
+            y_pred_bce_monitored=np.asarray(bce_monitored_val_preds),
+            y_pred_pv_bce_init=np.asarray(pv_bce_init_preds),
+            dataset_name=name,
+            results_dir=RESULTS_DIR,
+            alpha=0.27
+        )
+
+        # 6. Evaluate TEST Set pVOROS metrics for ALL 4 METHODS
+        x_test_jax = jnp.asarray(X_test, dtype=jnp.float64)
         pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test)
         pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test)
         bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test)
@@ -475,7 +581,7 @@ def main():
             "bce_monitored_test": float(bce_monitored_test_score) * 100,
         }
 
-        # Cache final model weights
+        # Cache model weights
         dim_label = name.split()[1] if "PCA" in name else "full"
         np.save(RESULTS_DIR / f"pv_rand_w_{dim_label}.npy", np.asarray(pv_rand_params["w"]))
         np.save(RESULTS_DIR / f"pv_rand_b_{dim_label}.npy", np.asarray(pv_rand_params["b"]))
@@ -486,7 +592,7 @@ def main():
         np.save(RESULTS_DIR / f"bce_monitored_w_{dim_label}.npy", np.asarray(bce_monitored_params["w"]))
         np.save(RESULTS_DIR / f"bce_monitored_b_{dim_label}.npy", np.asarray(bce_monitored_params["b"]))
 
-    # Print Comparison Table
+    # Summary Table
     print("\n" + "=" * 90)
     print("                     FINAL HELD-OUT TEST SET EVALUATION SUMMARY")
     print("=" * 90)
