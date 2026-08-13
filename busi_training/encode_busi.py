@@ -4,6 +4,7 @@ import re
 import torch
 import torchvision
 import torch.nn as nn
+from torchvision.utils import save_image
 from torchvision.io import read_image
 
 class Identity(nn.Module):
@@ -66,16 +67,16 @@ if __name__=='__main__':
             #assert label in ['benign', 'malignant', 'normal']
 
             #print(file)
-            if re.search(r'\([0-9]+\).png$', file):
-                label = re.split(r'\/', root)[-1]
+            if re.search('\([0-9]+\).png$', file):
+                label = re.split('\/', root)[-1]
                 assert label in ['benign', 'malignant', 'normal'], 'Unexpected label: {}'.format(label)
                 path = os.path.join(root, file)
 
                 print(label,":", file)
-
+                
                 encoded_image = encode_image(model, path, grayscale=False)
-                new_path = f'busi_embeddings/{label}/'
+                new_path = '{}/ViT_embeddings/{}/'.format(os.path.dirname(args.dataset_path), label)
                 if not os.path.exists(new_path):
                     os.makedirs(new_path)
-                encoded_path = new_path + re.split(r'\.', file)[0] + ".pt"
+                encoded_path = new_path+re.split('\.', file)[0]+".pt"
                 torch.save(encoded_image, encoded_path)

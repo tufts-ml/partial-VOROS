@@ -1,11 +1,23 @@
+import argparse
+import os
 import numpy as np
+
+# Default to CPU unless CUDA is explicitly available. This avoids the
+# JAX backend initialization crash in environments without a GPU.
+# os.environ.setdefault('JAX_PLATFORMS', 'cpu')
+
 import jax
+jax.config.update('jax_enable_x64', False)
 import jax.numpy as jnp
 import optax
+
+print(f"JAX backend: {jax.default_backend()}")
+print(f"JAX devices: {jax.devices()}")
+
 import matplotlib.pyplot as plt
 import torch
 from sklearn.decomposition import PCA
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.metrics import roc_curve
 from sklearn.preprocessing import StandardScaler
 from metrics_jax import pvoros_score, pv_loss_fixed_thresh, soft_roc_fixed_thresholds
@@ -13,16 +25,19 @@ from metrics import pvoros_score as pvoros_score_np
 import _geometry_jax
 from pathlib import Path
 
-DATA_DIR = Path("busi_training/busi_embeddings")
+DATA_DIR = Path("/cluster/tufts/hugheslab/datasets/BUSI/ViT_embeddings")
 RESULTS_DIR = Path("busi_training/results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
 VAL_FRACTION = 0.20
 TEST_FRACTION = 0.20
 SPLIT_SEED = 0
+CROSS_VAL_FOLDS = 5
 
 LR = 1e-4
 EPOCHS = 100
+LR_CANDIDATES = [1e-5, 3e-5, 1e-4, 3e-4, 1e-3]
+WD_CANDIDATES = [0.0, 1e-5, 1e-4, 1e-3, 1e-2]
 
 
 # ---------------------------------------------------------------------------
@@ -68,8 +83,8 @@ def load_embeddings_and_labels(root: Path):
 
 def init_params(key, dim):
     return {
-        "w": jax.random.normal(key, (dim,), dtype=jnp.float64) * 0.01,
-        "b": jnp.array(0.0, dtype=jnp.float64),
+        "w": jax.random.normal(key, (dim,), dtype=jnp.float32) * 0.01,
+        "b": jnp.array(0.0, dtype=jnp.float32),
     }
 
 
@@ -143,8 +158,8 @@ def plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=None, x_min=0.
 
 def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce_init, dataset_name, results_dir, alpha, kappa_frac, min_fp, max_fp):
     """Plots empirical ROC with alpha and kappa feasible bounds and iso-performance lines."""
-    y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
-    y_pred_pv_jax = jnp.asarray(y_pred_pv, dtype=jnp.float64)
+    y_val_jax = jnp.asarray(y_val, dtype=jnp.float32)
+    y_pred_pv_jax = jnp.asarray(y_pred_pv, dtype=jnp.float32)
 
     fprs_emp, tprs_emp, _ = roc_curve(y_val, y_pred_pv)
     fprs_emp_bce, tprs_emp_bce, _ = roc_curve(y_val, y_pred_bce_monitored)
@@ -216,14 +231,14 @@ def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce
 # ---------------------------------------------------------------------------
 # 3. Full-Batch Optimization Pipelines
 # ---------------------------------------------------------------------------
-def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR, seed=0, n_restarts=1, inits_per_seed=10):
+def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR, seed=0, n_restarts=1, inits_per_seed=10, weight_decay=1e-2):
     """Method 1: Full-batch Soft PV Loss from Random Initializations."""
-    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
-    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adamw(learning_rate=lr, weight_decay=1e-2)
+        optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     )
 
     P_tr, N_tr = jnp.sum(y_tr == 1.0), jnp.sum(y_tr == 0.0)
@@ -268,6 +283,8 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, m
                 if va_pv > best_val_pvoros:
                     best_val_pvoros = va_pv
                     best_params = params
+                # Print training state
+                # print(f"[PV RAND] Epoch {ep:3d} | train_loss={float(tr_loss):.4f} | val_loss={float(va_loss):.4f} | train_pv={tr_pv:.4f} | val_pv={va_pv:.4f}")
 
         history = {
             "train_losses": train_losses,
@@ -303,14 +320,14 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, m
     return best_overall_params, all_trace_histories
 
 
-def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_params, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR):
+def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_params, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR, weight_decay=1e-2):
     """Method 2: Full-batch Soft PV Loss starting from BCE Initializer."""
-    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
-    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adamw(learning_rate=lr, weight_decay=1e-2)
+        optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     )
 
     P_tr, N_tr = jnp.sum(y_tr == 1.0), jnp.sum(y_tr == 0.0)
@@ -323,8 +340,8 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
 
     # Initialize with BCE params
     params = {
-        "w": jnp.asarray(bce_init_params["w"], dtype=jnp.float64),
-        "b": jnp.asarray(bce_init_params["b"], dtype=jnp.float64),
+        "w": jnp.asarray(bce_init_params["w"], dtype=jnp.float32),
+        "b": jnp.asarray(bce_init_params["b"], dtype=jnp.float32),
     }
     opt_state = optimizer.init(params)
 
@@ -356,6 +373,8 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
             if va_pv > best_val_pvoros:
                 best_val_pvoros = va_pv
                 best_params = params
+            # Print training state
+            # print(f"[PV BCE INIT] Epoch {ep:3d} | train_loss={tr_loss:.4f} | val_loss={va_loss:.4f} | train_pv={tr_pv:.4f} | val_pv={va_pv:.4f}")
 
     history = {
         "train_losses": train_losses,
@@ -368,14 +387,14 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
     return best_params, history
 
 
-def train_baseline_bce_methods(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=1e-2):
+def train_baseline_bce_methods(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=1e-2, weight_decay=1e-2):
     """Methods 3 & 4: Full-batch BCE Training extracting both checkpointing strategies."""
-    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
-    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adam(learning_rate=lr)
+        optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     )
 
     key = jax.random.PRNGKey(SPLIT_SEED)
@@ -415,6 +434,8 @@ def train_baseline_bce_methods(X_train, y_train, X_val, y_val, alpha, kappa_frac
             if va_pv > best_val_pvoros:
                 best_val_pvoros = va_pv
                 best_pvoros_params = params
+            # Print training state
+            # print(f"[BCE BASE] Epoch {ep:3d} | train_bce={float(tr_bce_loss):.4f} | val_bce={va_bce_loss:.4f} | train_pv={tr_pv:.4f} | val_pv={va_pv:.4f}")
 
     history = {
         "train_bce_losses": train_bce_losses,
@@ -497,7 +518,61 @@ def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, 
 # ---------------------------------------------------------------------------
 # 5. Main Experiment Pipeline
 # ---------------------------------------------------------------------------
-def main():
+def tune_lr_with_cv(X, y, model_name, alpha, kappa_frac, min_fp, max_fp, candidate_lrs=None, wd_candidates=None, n_splits=CROSS_VAL_FOLDS):
+    """Tune learning rate for a model using 5-fold stratified CV on the train split."""
+    if candidate_lrs is None:
+        candidate_lrs = LR_CANDIDATES
+    if wd_candidates is None:
+        wd_candidates = WD_CANDIDATES
+
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=SPLIT_SEED)
+    grid_scores = {}
+    best_lr = candidate_lrs[0]
+    best_wd = wd_candidates[0]
+    best_score = -float("inf")
+
+    for lr in candidate_lrs:
+        for wd in wd_candidates:
+            fold_scores = []
+            for train_idx, valid_idx in cv.split(X, y):
+                X_tr, X_va = X[train_idx], X[valid_idx]
+                y_tr, y_va = y[train_idx], y[valid_idx]
+
+                if model_name == "pv_rand":
+                    _, histories = train_logreg_pv(
+                        X_tr, y_tr, X_va, y_va, alpha, kappa_frac, min_fp, max_fp,
+                        epochs=EPOCHS, lr=lr, seed=SPLIT_SEED, n_restarts=1, inits_per_seed=5, weight_decay=wd
+                    )
+                    score = max(run["history"]["best_val_pvoros"] for run in histories)
+                elif model_name == "pv_bce":
+                    _, history = train_logreg_pv_from_bce_init(
+                        X_tr, y_tr, X_va, y_va, init_params(jax.random.PRNGKey(SPLIT_SEED), X_tr.shape[1]),
+                        alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=lr, weight_decay=wd
+                    )
+                    score = history["best_val_pvoros"]
+                elif model_name == "bce":
+                    _, _, history = train_baseline_bce_methods(
+                        X_tr, y_tr, X_va, y_va, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=lr, weight_decay=wd
+                    )
+                    score = history["best_val_pvoros"]
+                else:
+                    raise ValueError(f"Unknown model_name: {model_name}")
+
+                fold_scores.append(float(score))
+
+            mean_score = float(np.mean(fold_scores))
+            grid_scores[(lr, wd)] = mean_score
+            print(f"[CV Tune] {model_name:12s} | lr={lr:.1e} wd={wd:.1e} | mean val pVOROS={mean_score:.4f}")
+
+            if mean_score > best_score:
+                best_score = mean_score
+                best_lr = lr
+                best_wd = wd
+
+    return best_lr, best_wd, grid_scores
+
+
+def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=CROSS_VAL_FOLDS, include_768=False):
     all_feats, all_labels = load_embeddings_and_labels(DATA_DIR)
 
     # 60-20-20 Stratified Split
@@ -507,12 +582,18 @@ def main():
     print(f"Val samples:   {X_val_raw.shape[0]} | Malignant rate: {y_val.mean():.3f}")
     print(f"Test samples:  {X_test_raw.shape[0]} | Malignant rate: {y_test.mean():.3f}")
 
-    pca_dimensions = [2, 30, 120]
-    datasets = {
-        f"Full ({X_train_raw.shape[1]}D)": (X_train_raw, X_val_raw, X_test_raw)
-    }
+    if pca_dimensions is None:
+        pca_dimensions = [2, 30, 120]
+    datasets = {}
+    # Only include the full-dimension representation if it's not 768D or user explicitly requested 768D
+    full_dim = X_train_raw.shape[1]
+    if include_768 or full_dim != 768:
+        datasets[f"Full ({full_dim}D)"] = (X_train_raw, X_val_raw, X_test_raw)
 
     for dim in pca_dimensions:
+        # Skip 768D PCA unless explicitly requested (avoid redundant full-dim run)
+        if dim == 768 and not include_768:
+            continue
         scaler = StandardScaler()
         X_tr = scaler.fit_transform(X_train_raw)
         X_va = scaler.transform(X_val_raw)
@@ -538,24 +619,35 @@ def main():
         print(f"        RUNNING EXPERIMENT: {name}")
         print("=" * 65)
 
+        pv_rand_lr, pv_rand_wd, _ = tune_lr_with_cv(X_train, y_train, "pv_rand", alpha, kappa_frac, min_fp, max_fp, candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds)
+        pv_bce_lr, pv_bce_wd, _ = tune_lr_with_cv(X_train, y_train, "pv_bce", alpha, kappa_frac, min_fp, max_fp, candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds)
+        bce_lr, bce_wd, _ = tune_lr_with_cv(X_train, y_train, "bce", alpha, kappa_frac, min_fp, max_fp, candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds)
+
+        print(f"[Selected LRs] PV random: {pv_rand_lr:.1e} | PV BCE init: {pv_bce_lr:.1e} | BCE: {bce_lr:.1e}")
+
         # 1. Method 1: Soft PV Loss (Random Initializations)
-        pv_rand_params, pv_rand_histories = train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, n_restarts=1)
+        pv_rand_params, pv_rand_histories = train_logreg_pv(
+            X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp,
+            epochs=EPOCHS, lr=pv_rand_lr, n_restarts=1, weight_decay=pv_rand_wd
+        )
 
         # 2. Methods 3 & 4: Standard BCE Training
         bce_std_params, bce_monitored_params, bce_history = train_baseline_bce_methods(
-            X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR
+            X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp,
+            epochs=EPOCHS, lr=bce_lr, weight_decay=bce_wd
         )
 
         # 3. Method 2: Soft PV Loss (BCE Checkpoint Initializer)
         pv_bce_params, pv_bce_history = train_logreg_pv_from_bce_init(
-            X_train, y_train, X_val, y_val, bce_std_params, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR
+            X_train, y_train, X_val, y_val, bce_std_params, alpha, kappa_frac, min_fp, max_fp,
+            epochs=EPOCHS, lr=pv_bce_lr, weight_decay=pv_bce_wd
         )
 
         # 4. Generate Training Trace Plots
         plot_training_traces(pv_rand_histories, pv_bce_history, bce_history, name, RESULTS_DIR)
 
         # 5. Generate ROC Curve Plot with Feasible Region and Iso-performance Lines
-        x_val_jax = jnp.asarray(X_val, dtype=jnp.float64)
+        x_val_jax = jnp.asarray(X_val, dtype=jnp.float32)
         pv_rand_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_rand_params["w"]) + pv_rand_params["b"])
         bce_monitored_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, bce_monitored_params["w"]) + bce_monitored_params["b"])
         pv_bce_init_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_bce_params["w"]) + pv_bce_params["b"])
@@ -571,7 +663,7 @@ def main():
         )
 
         # 6. Evaluate TEST Set pVOROS metrics for ALL 4 METHODS
-        x_test_jax = jnp.asarray(X_test, dtype=jnp.float64)
+        x_test_jax = jnp.asarray(X_test, dtype=jnp.float32)
         pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
         pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
         bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
@@ -613,4 +705,32 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dims', type=str, default='2,30,120',
+                        help='Comma-separated PCA dimensions to include (e.g. "2,30,120").')
+    parser.add_argument('--lr_candidates', type=str, default=','.join(map(str, LR_CANDIDATES)),
+                        help='Comma-separated learning rate candidates.')
+    parser.add_argument('--wd_candidates', type=str, default=','.join(map(str, WD_CANDIDATES)),
+                        help='Comma-separated weight-decay candidates.')
+    parser.add_argument('--cv_folds', type=int, default=CROSS_VAL_FOLDS,
+                        help='Number of CV folds to use when tuning.')
+    parser.add_argument('--include_768', action='store_true', default=False,
+                        help='Also include a 768D representation (adds 768 to PCA dims).')
+    args = parser.parse_args()
+
+    # Parse PCA dims
+    if args.dims.strip() == '':
+        pca_dims = []
+    else:
+        pca_dims = [int(x) for x in args.dims.split(',') if x.strip()]
+
+    # Parse LR and WD candidate lists
+    lr_candidates = [float(x) for x in args.lr_candidates.split(',') if x.strip()]
+    wd_candidates = [float(x) for x in args.wd_candidates.split(',') if x.strip()]
+
+    # Optionally include 768D representation
+    if args.include_768:
+        if 768 not in pca_dims:
+            pca_dims.append(768)
+
+    main(pca_dimensions=pca_dims, lr_candidates=lr_candidates, wd_candidates=wd_candidates, cv_folds=args.cv_folds, include_768=args.include_768)
