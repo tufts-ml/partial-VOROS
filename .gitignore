@@ -189,5 +189,7 @@ cache
 
 busi_training/busi_embeddings
 busi_training/results
+logs
+
 
 *.zip

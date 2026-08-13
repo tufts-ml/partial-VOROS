@@ -12,17 +12,19 @@ from metrics_jax import pvoros_score, pv_loss_fixed_thresh, soft_roc_fixed_thres
 from metrics import pvoros_score as pvoros_score_np
 import _geometry_jax
 from pathlib import Path
+import argparse
+import pandas as pd
 
 DATA_DIR = Path("busi_training/busi_embeddings")
 RESULTS_DIR = Path("busi_training/results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
+GRIDSEARCH_DIR = RESULTS_DIR / "gridsearch"
+GRIDSEARCH_DIR.mkdir(parents=True, exist_ok=True)
+
 VAL_FRACTION = 0.20
 TEST_FRACTION = 0.20
 SPLIT_SEED = 0
-
-LR = 1e-4
-EPOCHS = 100
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +218,7 @@ def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce
 # ---------------------------------------------------------------------------
 # 3. Full-Batch Optimization Pipelines
 # ---------------------------------------------------------------------------
-def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR, seed=0, n_restarts=1, inits_per_seed=10):
+def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs, lr, seed=0, n_restarts=1, inits_per_seed=10):
     """Method 1: Full-batch Soft PV Loss from Random Initializations."""
     x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
     x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
@@ -303,7 +305,7 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, m
     return best_overall_params, all_trace_histories
 
 
-def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_params, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR):
+def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_params, alpha, kappa_frac, min_fp, max_fp, epochs, lr):
     """Method 2: Full-batch Soft PV Loss starting from BCE Initializer."""
     x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
     x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
@@ -368,7 +370,7 @@ def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_param
     return best_params, history
 
 
-def train_baseline_bce_methods(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=1e-2):
+def train_baseline_bce_methods(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs, lr):
     """Methods 3 & 4: Full-batch BCE Training extracting both checkpointing strategies."""
     x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
     x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
@@ -432,9 +434,9 @@ def train_baseline_bce_methods(X_train, y_train, X_val, y_val, alpha, kappa_frac
 # ---------------------------------------------------------------------------
 # 4. Plot Training Traces
 # ---------------------------------------------------------------------------
-def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, dataset_name, results_dir):
+def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, dataset_name, results_dir, epochs):
     """Plot Soft PV Loss (best random init + BCE init) and true pVOROS evaluation traces across epochs."""
-    epochs_range = np.arange(1, EPOCHS + 1)
+    epochs_range = np.arange(1, epochs + 1)
     filename_safe = dataset_name.replace(" ", "_").replace("/", "_").replace("(", "").replace(")", "").replace("%", "")
 
     fig, (ax_loss, ax_score) = plt.subplots(1, 2, figsize=(16, 6))
@@ -493,11 +495,57 @@ def plot_training_traces(pv_random_histories, pv_bce_init_history, bce_history, 
     plt.close(fig)
     print(f"Saved trace plot: {plot_path}")
 
+# ---------------------------------------------------------------------------
+# 5. Load Master Validation Grid & Select Best Hyperparameters
+# ---------------------------------------------------------------------------
+def load_all_validation_results():
+    csv_files = list(GRIDSEARCH_DIR.glob("val_results_w*_i*_s*.csv"))
+    if not csv_files:
+        raise FileNotFoundError(f"No validation CSV files found in {GRIDSEARCH_DIR}")
+
+    dfs = [pd.read_csv(f) for f in csv_files]
+    master_df = pd.concat(dfs, ignore_index=True)
+    return master_df
+
+
+def get_best_hyperparameters(master_df):
+    """Identifies top hyperparameters per representation and method."""
+    methods = {
+        "PV (Random Init)": "val_pv_rand_score",
+        "PV (BCE Init)": "val_pv_bce_score",
+        "BCE (Std Val BCE)": "val_bce_score",
+        "BCE (Monitored PV)": "val_bce_checkpoint_score",
+    }
+
+    best_configs = {}
+    datasets = master_df["dataset"].unique()
+
+    for ds in datasets:
+        ds_df = master_df[master_df["dataset"] == ds]
+        best_configs[ds] = {}
+
+        for method_name, col in methods.items():
+            best_idx = ds_df[col].idxmax()
+            best_row = ds_df.loc[best_idx]
+            best_configs[ds][method_name] = {
+                "w": best_row["weight_decay"],
+                "i": int(best_row["epochs"]),
+                "s": best_row["learning_rate"],
+                "val_score": best_row[col],
+            }
+
+    return best_configs
+
 
 # ---------------------------------------------------------------------------
-# 5. Main Experiment Pipeline
+# 6. Experiment Pipeline
 # ---------------------------------------------------------------------------
-def main():
+def experiment():
+    parser = argparse.ArgumentParser(description="Grid search for logistic regression")
+    parser.add_argument("--w", type=float, default=1e-2, help="Weight decay")
+    parser.add_argument("--i", type=int, default=100, help="Number of iterations / epochs")
+    parser.add_argument("--s", type=float, default=1e-4, help="Step size / learning rate")
+    args = parser.parse_args()
     all_feats, all_labels = load_embeddings_and_labels(DATA_DIR)
 
     # 60-20-20 Stratified Split
@@ -533,26 +581,28 @@ def main():
     min_fp = 1/9
     max_fp = 1/6
 
+    val_records = []
+
     for name, (X_train, X_val, X_test) in datasets.items():
         print("\n" + "=" * 65)
         print(f"        RUNNING EXPERIMENT: {name}")
         print("=" * 65)
 
         # 1. Method 1: Soft PV Loss (Random Initializations)
-        pv_rand_params, pv_rand_histories = train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, n_restarts=1)
+        pv_rand_params, pv_rand_histories = train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=args.i, lr=args.w, n_restarts=1)
 
         # 2. Methods 3 & 4: Standard BCE Training
         bce_std_params, bce_monitored_params, bce_history = train_baseline_bce_methods(
-            X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR
+            X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=args.i, lr=args.w
         )
 
         # 3. Method 2: Soft PV Loss (BCE Checkpoint Initializer)
         pv_bce_params, pv_bce_history = train_logreg_pv_from_bce_init(
-            X_train, y_train, X_val, y_val, bce_std_params, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR
+            X_train, y_train, X_val, y_val, bce_std_params, alpha, kappa_frac, min_fp, max_fp, epochs=args.i, lr=args.w
         )
 
         # 4. Generate Training Trace Plots
-        plot_training_traces(pv_rand_histories, pv_bce_history, bce_history, name, RESULTS_DIR)
+        plot_training_traces(pv_rand_histories, pv_bce_history, bce_history, name, RESULTS_DIR, args.i)
 
         # 5. Generate ROC Curve Plot with Feasible Region and Iso-performance Lines
         x_val_jax = jnp.asarray(X_val, dtype=jnp.float64)
@@ -570,30 +620,56 @@ def main():
             alpha=alpha, kappa_frac=kappa_frac, min_fp=min_fp, max_fp=max_fp
         )
 
-        # 6. Evaluate TEST Set pVOROS metrics for ALL 4 METHODS
-        x_test_jax = jnp.asarray(X_test, dtype=jnp.float64)
-        pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
-        pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
-        bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
-        bce_monitored_test_score = compute_pvoros_metric(bce_monitored_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
 
-        results_summary[name] = {
-            "pv_rand_test": float(pv_rand_test_score) * 100,
-            "pv_bce_test": float(pv_bce_test_score) * 100,
-            "bce_std_test": float(bce_std_test_score) * 100,
-            "bce_monitored_test": float(bce_monitored_test_score) * 100,
-        }
+        val_pv_rand = max(run["history"]["best_val_pvoros"] for run in pv_rand_histories)
+        _, val_bce = bce_history["val_pvoros"][-1]
+        val_bce_monitored_pv = bce_history["best_val_pvoros"]
+        val_pv_bce = pv_bce_history["best_val_pvoros"]
+
+        val_records.append({
+            "dataset": name,
+            "weight_decay": args.w,
+            "epochs": args.i,
+            "learning_rate": args.s,
+            "val_pv_rand_score": val_pv_rand,
+            "val_pv_bce_score": val_pv_bce,
+            "val_bce_score": val_bce,
+            "val_bce_checkpoint_score": val_bce_monitored_pv,
+        })
+
+        df_val = pd.DataFrame(val_records)
+        out_csv = GRIDSEARCH_DIR / f"val_results_w{args.w}_i{args.i}_s{args.s}.csv"
+        df_val.to_csv(out_csv, index=False)
+        print(f"\nSuccessfully written validation grid log: {out_csv}", flush=True)
+        # # 6. Evaluate TEST Set pVOROS metrics for ALL 4 METHODS
+        # x_test_jax = jnp.asarray(X_test, dtype=jnp.float64)
+        # pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        # pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        # bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        # bce_monitored_test_score = compute_pvoros_metric(bce_monitored_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+
+        # results_summary[name] = {
+        #     "pv_rand_test": float(pv_rand_test_score) * 100,
+        #     "pv_bce_test": float(pv_bce_test_score) * 100,
+        #     "bce_std_test": float(bce_std_test_score) * 100,
+        #     "bce_monitored_test": float(bce_monitored_test_score) * 100,
+        # }
 
         # Cache model weights
         dim_label = name.split()[1] if "PCA" in name else "full"
-        np.save(RESULTS_DIR / f"pv_rand_w_{dim_label}.npy", np.asarray(pv_rand_params["w"]))
-        np.save(RESULTS_DIR / f"pv_rand_b_{dim_label}.npy", np.asarray(pv_rand_params["b"]))
-        np.save(RESULTS_DIR / f"pv_bce_w_{dim_label}.npy", np.asarray(pv_bce_params["w"]))
-        np.save(RESULTS_DIR / f"pv_bce_b_{dim_label}.npy", np.asarray(pv_bce_params["b"]))
-        np.save(RESULTS_DIR / f"bce_std_w_{dim_label}.npy", np.asarray(bce_std_params["w"]))
-        np.save(RESULTS_DIR / f"bce_std_b_{dim_label}.npy", np.asarray(bce_std_params["b"]))
-        np.save(RESULTS_DIR / f"bce_monitored_w_{dim_label}.npy", np.asarray(bce_monitored_params["w"]))
-        np.save(RESULTS_DIR / f"bce_monitored_b_{dim_label}.npy", np.asarray(bce_monitored_params["b"]))
+        param_tag = f"{dim_label}_w{args.w}_i{args.i}_s{args.s}"
+
+        np.save(RESULTS_DIR / f"pv_rand_w_{param_tag}.npy", np.asarray(pv_rand_params["w"]))
+        np.save(RESULTS_DIR / f"pv_rand_b_{param_tag}.npy", np.asarray(pv_rand_params["b"]))
+
+        np.save(RESULTS_DIR / f"pv_bce_w_{param_tag}.npy", np.asarray(pv_bce_params["w"]))
+        np.save(RESULTS_DIR / f"pv_bce_b_{param_tag}.npy", np.asarray(pv_bce_params["b"]))
+
+        np.save(RESULTS_DIR / f"bce_std_w_{param_tag}.npy", np.asarray(bce_std_params["w"]))
+        np.save(RESULTS_DIR / f"bce_std_b_{param_tag}.npy", np.asarray(bce_std_params["b"]))
+
+        np.save(RESULTS_DIR / f"bce_monitored_w_{param_tag}.npy", np.asarray(bce_monitored_params["w"]))
+        np.save(RESULTS_DIR / f"bce_monitored_b_{param_tag}.npy", np.asarray(bce_monitored_params["b"]))
 
     # Summary Table
     print("\n" + "=" * 90)
@@ -613,4 +689,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    experiment()
