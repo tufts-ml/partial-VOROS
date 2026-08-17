@@ -35,9 +35,9 @@ SPLIT_SEED = 0
 CROSS_VAL_FOLDS = 5
 
 LR = 1e-4
-EPOCHS = 100
-LR_CANDIDATES = [1e-5, 3e-5, 1e-4, 3e-4, 1e-3]
-WD_CANDIDATES = [0.0, 1e-5, 1e-4, 1e-3, 1e-2]
+EPOCHS = 50
+LR_CANDIDATES = [1e-5, 1e-4, 1e-3, 1e-2]
+WD_CANDIDATES = [0, 1e-5, 1e-4, 1e-3, 1e-2]
 
 
 # ---------------------------------------------------------------------------
