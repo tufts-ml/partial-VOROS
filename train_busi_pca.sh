@@ -5,12 +5,14 @@
 #SBATCH --mem=48g
 #SBATCH --partition=gpu
 #SBATCH --time=48:00:00
+#SBATCH --array=0-5
 
 source ~/.bashrc
 
 conda activate pvoros
 
 python train_busi_pca.py \
-    --dims="30"
+    --dims="30" \
+    --config_index="${SLURM_ARRAY_TASK_ID}"
 
 conda deactivate

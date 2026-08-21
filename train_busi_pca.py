@@ -231,7 +231,21 @@ def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce
 # ---------------------------------------------------------------------------
 # 3. Full-Batch Optimization Pipelines
 # ---------------------------------------------------------------------------
-def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR, seed=0, n_restarts=1, inits_per_seed=10, weight_decay=1e-2):
+def train_logreg_pv(
+    X_train, 
+    y_train, 
+    X_val, 
+    y_val, 
+    alpha, 
+    kappa_frac, 
+    min_fp, 
+    max_fp, 
+    epochs=EPOCHS, 
+    lr=LR, 
+    seed=0, 
+    n_restarts=1, 
+    inits_per_seed=10, 
+    weight_decay=1e-2):
     """Method 1: Full-batch Soft PV Loss from Random Initializations."""
     x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
     x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
@@ -320,7 +334,19 @@ def train_logreg_pv(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, m
     return best_overall_params, all_trace_histories
 
 
-def train_logreg_pv_from_bce_init(X_train, y_train, X_val, y_val, bce_init_params, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=LR, weight_decay=1e-2):
+def train_logreg_pv_from_bce_init(
+    X_train, 
+    y_train, 
+    X_val, 
+    y_val, 
+    bce_init_params, 
+    alpha, 
+    kappa_frac, 
+    min_fp, 
+    max_fp, 
+    epochs=EPOCHS, 
+    lr=LR, 
+    weight_decay=1e-2):
     """Method 2: Full-batch Soft PV Loss starting from BCE Initializer."""
     x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
     x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
@@ -609,8 +635,14 @@ CONSTRAINT_CONFIGS = [
     {"alpha": 0.4, "kappa_frac": 0.5},
 ]
 
+CONFIGS = [
+    {"min_fp": min_fp, "max_fp": max_fp, **constraint}
+    for min_fp, max_fp in FP_PAIRS
+    for constraint in CONSTRAINT_CONFIGS
+]
 
-def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=CROSS_VAL_FOLDS, include_768=False):
+
+def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=CROSS_VAL_FOLDS, include_768=False, config_index=None):
     all_feats, all_labels = load_embeddings_and_labels(DATA_DIR)
 
     # 60-20-20 Stratified Split
@@ -656,8 +688,14 @@ def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=C
 
     results_summary = {}
 
-    for min_fp, max_fp in FP_PAIRS:
-        for constraint in CONSTRAINT_CONFIGS:
+    if config_index is not None:
+        configs_to_run = [CONFIGS[config_index]]
+    else:
+        configs_to_run = CONFIGS
+
+    for constraint in configs_to_run:
+            min_fp = constraint["min_fp"]
+            max_fp = constraint["max_fp"]
             alpha = constraint["alpha"]
             kappa_frac = constraint["kappa_frac"]
             config_label = _config_label(alpha, kappa_frac, min_fp, max_fp)
@@ -788,6 +826,9 @@ if __name__ == "__main__":
                         help='Number of CV folds to use when tuning.')
     parser.add_argument('--include_768', action='store_true', default=False,
                         help='Include the full raw 768D embedding representation (when available).')
+    parser.add_argument('--config_index', type=int, default=None,
+                        help='Run only CONFIGS[config_index] (0-based) instead of all constraint configs. '
+                             'Useful for splitting configs across separate Slurm array jobs.')
     args = parser.parse_args()
 
     # Parse PCA dims
@@ -800,4 +841,4 @@ if __name__ == "__main__":
     lr_candidates = [float(x) for x in args.lr_candidates.split(',') if x.strip()]
     wd_candidates = [float(x) for x in args.wd_candidates.split(',') if x.strip()]
 
-    main(pca_dimensions=pca_dims, lr_candidates=lr_candidates, wd_candidates=wd_candidates, cv_folds=args.cv_folds, include_768=args.include_768)
+    main(pca_dimensions=pca_dims, lr_candidates=lr_candidates, wd_candidates=wd_candidates, cv_folds=args.cv_folds, include_768=args.include_768, config_index=args.config_index)
