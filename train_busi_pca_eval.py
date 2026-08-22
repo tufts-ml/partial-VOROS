@@ -20,7 +20,10 @@ DATA_DIR = Path("busi_training/busi_embeddings")
 RESULTS_DIR = Path("busi_training/results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
-GRIDSEARCH_DIR = RESULTS_DIR / "gridsearch"
+PARAM_DIR = RESULTS_DIR / "params"
+PARAM_DIR.mkdir(parents=True, exist_ok=True)
+
+GRIDSEARCH_DIR = RESULTS_DIR / "gridsearch_a0.6_k0.5"
 GRIDSEARCH_DIR.mkdir(parents=True, exist_ok=True)
 
 VAL_FRACTION = 0.20
@@ -29,7 +32,7 @@ SPLIT_SEED = 0
 
 
 def load_all_validation_results():
-    csv_files = list(GRIDSEARCH_DIR.glob("val_results_w*_i*_s*.csv"))
+    csv_files = list(GRIDSEARCH_DIR.glob("val_results_w*_s*.csv"))
     if not csv_files:
         raise FileNotFoundError(f"No validation CSV files found in {GRIDSEARCH_DIR}")
 
@@ -59,7 +62,6 @@ def get_best_hyperparameters(master_df):
             best_row = ds_df.loc[best_idx]
             best_configs[ds][method_name] = {
                 "w": best_row["weight_decay"],
-                "i": int(best_row["epochs"]),
                 "s": best_row["learning_rate"],
                 "val_score": best_row[col],
             }
@@ -102,6 +104,7 @@ def eval_test():
     kappa_frac = 0.5
     min_fp = 1 / 9
     max_fp = 1 / 6
+    epochs = 100
 
     test_summary = []
 
@@ -113,42 +116,38 @@ def eval_test():
 
         # Load weights saved during best checkpoints
         best_w = cfg['PV (Random Init)']['w']
-        best_i = cfg['PV (Random Init)']['i']
         best_s = cfg['PV (Random Init)']['s']
 
-        param_tag = f"{dim_label}_w{best_w}_i{best_i}_s{best_s}"
-        pv_rand_w = np.load(RESULTS_DIR / f"pv_rand_w_{param_tag}.npy")
-        pv_rand_b = np.load(RESULTS_DIR / f"pv_rand_b_{param_tag}.npy")
+        param_tag = f"{dim_label}_w{best_w}_s{best_s}"
+        pv_rand_w = np.load(PARAM_DIR / f"pv_rand_w_{param_tag}.npy")
+        pv_rand_b = np.load(PARAM_DIR / f"pv_rand_b_{param_tag}.npy")
         pv_rand_params = {"w": jnp.asarray(pv_rand_w), "b": jnp.asarray(pv_rand_b)}
 
 
         best_w = cfg['PV (BCE Init)']['w']
-        best_i = cfg['PV (BCE Init)']['i']
         best_s = cfg['PV (BCE Init)']['s']
 
-        param_tag = f"{dim_label}_w{best_w}_i{best_i}_s{best_s}"
-        pv_bce_w = np.load(RESULTS_DIR / f"pv_bce_w_{param_tag}.npy")
-        pv_bce_b = np.load(RESULTS_DIR / f"pv_bce_b_{param_tag}.npy")
+        param_tag = f"{dim_label}_w{best_w}_s{best_s}"
+        pv_bce_w = np.load(PARAM_DIR / f"pv_bce_w_{param_tag}.npy")
+        pv_bce_b = np.load(PARAM_DIR / f"pv_bce_b_{param_tag}.npy")
         pv_bce_params = {"w": jnp.asarray(pv_bce_w), "b": jnp.asarray(pv_bce_b)}
 
 
         best_w = cfg['BCE (Std Val BCE)']['w']
-        best_i = cfg['BCE (Std Val BCE)']['i']
         best_s = cfg['BCE (Std Val BCE)']['s']
 
-        param_tag = f"{dim_label}_w{best_w}_i{best_i}_s{best_s}"
-        bce_std_w = np.load(RESULTS_DIR / f"bce_std_w_{param_tag}.npy")
-        bce_std_b = np.load(RESULTS_DIR / f"bce_std_b_{param_tag}.npy")
+        param_tag = f"{dim_label}_w{best_w}_s{best_s}"
+        bce_std_w = np.load(PARAM_DIR / f"bce_std_w_{param_tag}.npy")
+        bce_std_b = np.load(PARAM_DIR / f"bce_std_b_{param_tag}.npy")
         bce_std_params = {"w": jnp.asarray(bce_std_w), "b": jnp.asarray(bce_std_b)}
 
 
         best_w = cfg['BCE (Monitored PV)']['w']
-        best_i = cfg['BCE (Monitored PV)']['i']
         best_s = cfg['BCE (Monitored PV)']['s']
 
-        param_tag = f"{dim_label}_w{best_w}_i{best_i}_s{best_s}"
-        bce_mon_w = np.load(RESULTS_DIR / f"bce_monitored_w_{param_tag}.npy")
-        bce_mon_b = np.load(RESULTS_DIR / f"bce_monitored_b_{param_tag}.npy")
+        param_tag = f"{dim_label}_w{best_w}_s{best_s}"
+        bce_mon_w = np.load(PARAM_DIR / f"bce_monitored_w_{param_tag}.npy")
+        bce_mon_b = np.load(PARAM_DIR / f"bce_monitored_b_{param_tag}.npy")
         bce_mon_params = {"w": jnp.asarray(bce_mon_w), "b": jnp.asarray(bce_mon_b)}
 
         # Evaluate pVOROS score on Test Set
@@ -161,13 +160,13 @@ def eval_test():
         test_summary.append({
             "Representation": name,
             "PV (Rand) Test %": f"{score_pv_rand * 100:.2f}%",
-            "PV (Rand) Best Params": f"w={cfg['PV (Random Init)']['w']}, s={cfg['PV (Random Init)']['s']}, i={cfg['PV (Random Init)']['i']}",
+            "PV (Rand) Best Params": f"w={cfg['PV (Random Init)']['w']}, s={cfg['PV (Random Init)']['s']}",
             "PV (BCE Init) Test %": f"{score_pv_bce * 100:.2f}%",
-            "PV (BCE Init) Best Params": f"w={cfg['PV (BCE Init)']['w']}, s={cfg['PV (BCE Init)']['s']}, i={cfg['PV (BCE Init)']['i']}",
+            "PV (BCE Init) Best Params": f"w={cfg['PV (BCE Init)']['w']}, s={cfg['PV (BCE Init)']['s']}",
             "BCE (Std) Test %": f"{score_bce_std * 100:.2f}%",
-            "BCE (Std) Best Params": f"w={cfg['BCE (Std Val BCE)']['w']}, s={cfg['BCE (Std Val BCE)']['s']}, i={cfg['BCE (Std Val BCE)']['i']}",
+            "BCE (Std) Best Params": f"w={cfg['BCE (Std Val BCE)']['w']}, s={cfg['BCE (Std Val BCE)']['s']}",
             "BCE (Monitored) Test %": f"{score_bce_mon * 100:.2f}%",
-            "BCE (Monitored) Best Params": f"w={cfg['BCE (Monitored PV)']['w']}, s={cfg['BCE (Monitored PV)']['s']}, i={cfg['BCE (Monitored PV)']['i']}",
+            "BCE (Monitored) Best Params": f"w={cfg['BCE (Monitored PV)']['w']}, s={cfg['BCE (Monitored PV)']['s']}",
         })
 
     # Save Test Summary Table
