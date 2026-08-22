@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from sklearn.metrics import auc
 from test_jax_loss import _theta_c_to_wb
-from metrics_jax import soft_roc_fixed_thresholds as compute_soft_roc
+from metrics_jax import compute_soft_roc, pv_loss_theta_c
 
 # Enable 64-bit precision in JAX
 jax.config.update("jax_enable_x64", True)
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     train_test = data['train_test']
     
     # Loss gradient setup wrt 'w' and 'b' using metrics_jax.pv_loss
-    loss_and_grad_wb = jax.value_and_grad(grad.jax_voros_loss)
+    loss_and_grad_wb = jax.value_and_grad(pv_loss_theta_c)
     
     theta_vals = np.linspace(-np.pi, np.pi, grid_size)
     c_vals = np.linspace(-3.0, 3.0, grid_size)
@@ -92,7 +92,7 @@ if __name__ == "__main__":
                 
                 # Compute loss and gradients using metrics_jax.pv_loss
                 loss_val, grads = loss_and_grad_wb(
-                    params, X, Y, P, N, 1.0
+                    params, X, Y, P, N, kappa, ALPHA, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO
                 )
 
                 params = {
@@ -135,13 +135,28 @@ if __name__ == "__main__":
                 file_path = f"heatmaps/results_data/{seed}_res_{i}_{j}.txt"
                 try:
                     with open(file_path, 'r') as f:
+                        # Ensures correct array layout: heatmap[c_idx, theta_idx]
                         heatmap[i, j] = float(f.read().strip())
                 except FileNotFoundError:
                     heatmap[i, j] = 0.0
 
+        # Define domain boundaries in physical units
+        theta_min_deg = np.degrees(theta_vals[0])   # -180.0
+        theta_max_deg = np.degrees(theta_vals[-1])  #  180.0
+        c_min = c_vals[0]                           # -3.0
+        c_max = c_vals[-1]                          #  3.0
+
         # --- PLOT OVERLAY ---
         plt.figure(figsize=(10, 7))
-        im = plt.imshow(heatmap, origin='lower', aspect='auto', cmap='viridis')
+        
+        # extent=[left, right, bottom, top] stretches the grid to match the real physical axes
+        im = plt.imshow(
+            heatmap, 
+            origin='lower', 
+            aspect='auto', 
+            cmap='viridis',
+            extent=[theta_min_deg, theta_max_deg, c_min, c_max]
+        )
         cbar = plt.colorbar(im)
         cbar.set_label('Partial VOROS Score Metric', fontsize=11, labelpad=10)
 
@@ -162,14 +177,19 @@ if __name__ == "__main__":
 
         # 2. Plot BEST trial trajectory
         best_raw_thetas = best_data['param_history'][:, 0]
-        best_norm_thetas = np.array([grad.wrap_to_pi(t) for t in best_raw_thetas])
+        best_norm_thetas = np.array([wrap_to_pi(t) for t in best_raw_thetas])
         best_thetas_deg = np.degrees(best_norm_thetas)
         best_cs_tracked = best_data['param_history'][:, 1]
 
         plt.plot(best_thetas_deg, best_cs_tracked, color='white', linestyle='--', linewidth=1.2, alpha=0.8, zorder=3)
-        plt.quiver(best_thetas_deg[:-1], best_cs_tracked[:-1], 
-                   best_thetas_deg[1:] - best_thetas_deg[:-1], best_cs_tracked[1:] - best_cs_tracked[:-1], 
-                   scale_units='xy', angles='xy', scale=1, color='red', width=0.0035, zorder=4, label='Best Gradient Steps')
+        
+        # Prevent zero-length arrows from breaking quiver
+        if len(best_thetas_deg) > 1:
+            plt.quiver(
+                best_thetas_deg[:-1], best_cs_tracked[:-1], 
+                best_thetas_deg[1:] - best_thetas_deg[:-1], best_cs_tracked[1:] - best_cs_tracked[:-1], 
+                scale_units='xy', angles='xy', scale=1, color='red', width=0.0035, zorder=4, label='Best Gradient Steps'
+            )
         
         plt.scatter(best_thetas_deg[0], best_cs_tracked[0], color='#ff7f0e', edgecolor='black', s=55, zorder=5, label='Best Start')
         plt.scatter(best_thetas_deg[-1], best_cs_tracked[-1], color='#2ca02c', edgecolor='black', s=55, zorder=5, label='Best Convergence')
@@ -180,15 +200,20 @@ if __name__ == "__main__":
         plt.legend(loc='upper right', frameon=True, facecolor='white', framealpha=0.9)
         plt.grid(True, linestyle=':', alpha=0.4, color='white')
         
-        plt.xlim(np.degrees(theta_vals[0]), np.degrees(theta_vals[-1]))
-        plt.ylim(c_vals[0], c_vals[-1])
+        plt.xlim(theta_min_deg, theta_max_deg)
+        plt.ylim(c_min, c_max)
+
+        out_roc_pdf = f"plots/gradient_soft_pvoros_trajectory_{seed.replace('.npy', '')}.pdf"
+        plt.savefig(out_roc_pdf, format='pdf', dpi=300)
+        plt.close()
+        print(f"Saved plot: {out_roc_pdf}")
         # ---------------------------------------------------------
         # GENERATE ROC CURVE + ALPHA & KAPPA CONSTRAINTS PLOT
         # ---------------------------------------------------------
         scores = compute_decision_scores(X, optimal_theta, optimal_c)
-        fprs_raw, tprs_raw, _ = compute_soft_roc(Y, scores, temp=TEMP)
-        fprs_smooth = fprs_raw.at[0].set(0.0)
-        tprs_smooth = tprs_raw.at[0].set(0.0)
+        fprs_smooth, tprs_smooth, _ = compute_soft_roc(Y, scores, temp=TEMP)
+        # fprs_smooth = fprs_raw.at[0].set(0.0)
+        # tprs_smooth = tprs_raw.at[0].set(0.0)
         roc_auc = auc(fprs_smooth, tprs_smooth)
 
         plt.figure(figsize=(8, 8))
@@ -249,7 +274,7 @@ if __name__ == "__main__":
         plt.legend(loc='lower right', frameon=True, facecolor='white', framealpha=0.9, fontsize=10)
         
         plt.tight_layout()
-        out_roc_pdf = f"roc_dual_slope_bounded_{seed.replace('.npy', '')}.pdf"
+        out_roc_pdf = f"plots/roc_dual_slope_bounded_{seed.replace('.npy', '')}.pdf"
         plt.savefig(out_roc_pdf, format='pdf', dpi=300)
         plt.close()
         print(f"Saved plot: {out_roc_pdf}")

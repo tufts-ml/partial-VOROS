@@ -12,7 +12,7 @@ return_test_operating_points=True is passed.
 import numpy as np
 from sklearn.metrics import roc_curve, confusion_matrix
 
-from . import _geometry
+import _geometry
 
 
 # ---- Internal helpers ----

@@ -188,3 +188,6 @@ busi_training/busi_data
 cache
 
 *.zip
+
+busi_training/results
+logs

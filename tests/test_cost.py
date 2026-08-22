@@ -7,7 +7,9 @@ real MIMIC-IV prediction CSVs stored in pvoros/tests/fixtures/.
 import os
 import numpy as np
 import pytest
-
+# import sys
+# from pathlib import Path
+# sys.path.append(str(Path(__file__).resolve().parent.parent))
 from cost import recall_cost, pauroc_cost, pvoros_cost, voros_cost
 import _geometry
 from cost import _fpr_tpr_at_thresholds
