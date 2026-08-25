@@ -1,3 +1,7 @@
+"""
+Make heatmaps using results of w1w2_sweep.sh
+"""
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt

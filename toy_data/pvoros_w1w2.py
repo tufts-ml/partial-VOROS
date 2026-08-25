@@ -4,25 +4,19 @@ import sys
 import argparse
 import numpy as np
 from sklearn.metrics import roc_curve
-
-# --- ADJUSTED PATH INJECTION ---
-# Find the folder where this script lives
 script_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Find the PARENT directory (where _geometry actually lives)
 parent_dir = os.path.dirname(script_dir) 
 sys.path.append(parent_dir)
-
-# Now Python can step out of the folder and find your extension flawlessly!
 import _geometry
 
-alpha = 0.6
-kappa_frac = 0.5
-min_ratio = 1/9
-max_ratio = 1/6
-GRID_N_POINTS = 50 
 
 def main():
+    alpha = 0.6
+    kappa_frac = 0.5
+    min_ratio = 1/9
+    max_ratio = 1/6
+    GRID_N_POINTS = 50 
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--idx_i', type=int, required=True)
     parser.add_argument('--idx_j', type=int, required=True)

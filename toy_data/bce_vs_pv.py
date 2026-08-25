@@ -1,4 +1,6 @@
 """
+BCE vs. Soft PVOROS
+
 For each seed dataset:
   1. Load data_dict['data']['x'] / ['y'] and split into train/val (80/20).
   2. Train a logistic regression model with plain BCE loss (10 restarts, pick best final BCE).

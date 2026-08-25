@@ -1,3 +1,4 @@
+## Computes grid of (soft and hard) pVOROS scores over grid of angle/intercept
 ## Run: bash w1w2_sweep.sh (sigmoid)
 
 #!/bin/bash

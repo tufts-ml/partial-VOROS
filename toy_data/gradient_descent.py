@@ -1,3 +1,11 @@
+"""
+Gradient Descent for Toy Data
+
+    For each dataset, perform gradient descent using soft pVOROS loss function
+    and best of 10 random initializations. Plot the trajectory over heatmaps
+    previously saved (w1w2_sweep).
+"""
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -13,6 +21,9 @@ from metrics_jax import compute_soft_roc, pv_loss_theta_c
 
 # Enable 64-bit precision in JAX
 jax.config.update("jax_enable_x64", True)
+
+
+
 
 SEEDS = [
     'seed_101_201.npy',
