@@ -13,6 +13,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+import os
+import sys
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir) 
+sys.path.append(parent_dir)
 from metrics_jax import pv_loss, pvoros_loss_kept_on_valid
 
 

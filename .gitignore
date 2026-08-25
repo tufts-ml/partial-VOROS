@@ -173,11 +173,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-seed_101_201.npy
-seed_301_101.npy
-seed_501_801.npy
-seed_601_201.npy
-seed_701_501.npy
 visualize_data.py
 voros_results.npy
 debugging_training.py
@@ -185,9 +180,18 @@ debugging_training.py
 heatmaps/logs
 
 busi_training/busi_data
+busi_training/results
 cache
 
 *.zip
 
-busi_training/results
+
+
+
+toy_data/plots
+toy_data/results_data
+toy_data/results_data_soft_pv
+toy_data/*.pdf
+
 logs
+plots

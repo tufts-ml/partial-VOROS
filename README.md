@@ -1,4 +1,4 @@
-# pvoros
+# pVOROS Training
 
 Python library implementing **VOROS** (Volume Over ROC Surface) and **Partial VOROS** (pVOROS) metrics for evaluating binary classifiers under precision and capacity constraints.
 
@@ -20,21 +20,36 @@ Optimizing directly for confusion-matrix based metrics such as Partial VOROS is 
 ```
 ./
 ├── metrics.py          # VOROS/pVOROS scoring functions (scikit-learn compatible)
-├── metrics_jax.py      # VOROS/pVOROS scoring functions and soft-sets loss function (JAX implementation)
+├── metrics_jax.py      # VOROS/pVOROS scoring functions and Soft pVOROS loss function (JAX implementation)
 ├── cost.py             # Cost functions: threshold selected on val, cost evaluated on test
 ├── print_cost_table.py # Reproduce Table 1 and 2 from the paper
 ├── _geometry.py        # Internal geometry helpers (polygon clipping, reduced area, ROC filtering)
 ├── _geometry_jax.py    # Internal geometry helpers (JAX implementation)
+├── toy_data/      # Experiments on synthetic toy data
+    ├── w1w2_sweep.sh               # Scripts to make heatmap visualization of pVOROS score across grid of weights
+    ├── pvoros_w1w2.py              
+    ├── soft_pv_w1w2.py
+    ├── run_pvoros.slurm
+    ├── run_soft_pv.slurm
+    ├── make_plot.py                # 2D heatmaps
+    ├── 1d_plot.py                  # 1D plot (PV vs. w1, fixed w2)
+    ├── gradient_descent.py         # Gradient descent script, plot trajectory over heatmaps
+    └── bce_vs_pv.py                # Comparing Soft PV vs. BCE/monitored-BCE benchmarks
+├── busi_training/       
+    ├── encode_busi.py  
+    ├── label_busi.py
+    ├── try_clf.py
+    └── train_busi_pca.py           # Experiments on Breast Ultrasound Images (BUSI) dataset
+├── jax_unittest/      # Unit tests for old Numpy vs. new JAX implementations 
+    ├── test_geometry.py
+    ├── test_geometry_implem.py
+    ├── test_jax_loss.py
+    └── test_kept_on_valid.py
 └── tests/
     ├── fixtures/       # Real MIMIC-IV and eICU prediction CSVs used in regression tests
     ├── test_geometry.py
     ├── test_metrics.py
     └── test_cost.py
-└── busi_training/      # Experiments on Breast Ultrasound Images (BUSI) dataset 
-    ├── encode_busi.py  
-    ├── label_busi.py
-    ├── try_clf.py
-    └── train_busi_pca.py 
 ```
 
 ### `metrics.py` — VOROS scoring
@@ -61,8 +76,7 @@ score = scorer(y_true, y_pred)
 ```
 
 ### `metrics_jax.py` — VOROS scoring and soft pVOROS loss
-
-
+JAX implementations of metrics.py. Use loss functions during training/gradient descent.
 
 
 ### `cost.py` — deployment cost functions
@@ -89,9 +103,9 @@ cost, fprs_t, tprs_t = pvoros_cost(..., return_test_operating_points=True)
 | `pvoros_cost` | Per-cost-ratio pVOROS-optimal val threshold | pVOROS strategy |
 | `voros_cost`  | Same as `pvoros_cost` | For VOROS-selected models |
 
-### `_geometry.py` — internal helpers
+### `_geometry.py`, `_geometry_jax.py` — internal helpers
 
-Polygon clipping (Sutherland-Hodgman), reduced area computation over the feasible ROC region, and `_kept_on_valid` which filters ROC curve points to the constraint-feasible set. Not part of the public API.
+Polygon clipping (Sutherland-Hodgman), reduced area computation over the feasible ROC region, and `_kept_on_valid` which filters ROC curve points to the constraint-feasible set. Not part of the public API. (_geometry_jax.py is the JAX implementation, used in metrics_jax.py)
 
 ### `print_cost_table.py` — Reproduce Tables 1 and 2 from saved predictions
 

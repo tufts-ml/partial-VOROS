@@ -5,7 +5,11 @@ import jax.numpy as jnp
 
 # Ensure JAX float64 precision is enabled during testing
 jax.config.update("jax_enable_x64", True)
-
+import os
+import sys
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir) 
+sys.path.append(parent_dir)
 import _geometry
 import _geometry_jax
 
