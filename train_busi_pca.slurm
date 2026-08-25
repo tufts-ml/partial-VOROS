@@ -7,7 +7,7 @@
 #SBATCH --nodes=1                  # Number of nodes
 #SBATCH --ntasks=1                 # Number of tasks
 #SBATCH --gres=gpu:1       # CPU cores
-#SBATCH --mem=64G                 # Memory per node
+#SBATCH --mem=16G                 # Memory per node
 
 
 ## INSERT YOUR PYTHON FILE THAT YOU WANT TO RUN AND RELEVANT CALLS
