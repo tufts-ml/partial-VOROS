@@ -1,6 +1,8 @@
 # pvoros
 
-Python library implementing **VOROS** (Volume Over ROC Surface) and **partial VOROS** (pVOROS) metrics for evaluating binary classifiers under precision and capacity constraints.
+Python library implementing **VOROS** (Volume Over ROC Surface) and **Partial VOROS** (pVOROS) metrics for evaluating binary classifiers under precision and capacity constraints.
+
+This branch contains work towards training binary classifiers to optimize for partial VOROS.
 
 ## Background
 
@@ -11,19 +13,28 @@ VOROS summarizes classifier performance across a range of cost ratios by computi
 
 These metrics are designed for clinical decision support settings where deployable thresholds must satisfy real-world operating constraints.
 
+Optimizing directly for confusion-matrix based metrics such as Partial VOROS is often not feasible due to zero gradients of the Heaviside set-membership function. We introduce a Soft Partial VOROS using the soft set and sigmoid approximation method (Tsoi et al).
+
 ## Structure
 
 ```
 ./
 ├── metrics.py          # VOROS/pVOROS scoring functions (scikit-learn compatible)
+├── metrics_jax.py      # VOROS/pVOROS scoring functions and soft-sets loss function (JAX implementation)
 ├── cost.py             # Cost functions: threshold selected on val, cost evaluated on test
-├── print_cost_table.py # Reproduce Table X from the paper
+├── print_cost_table.py # Reproduce Table 1 and 2 from the paper
 ├── _geometry.py        # Internal geometry helpers (polygon clipping, reduced area, ROC filtering)
+├── _geometry_jax.py    # Internal geometry helpers (JAX implementation)
 └── tests/
     ├── fixtures/       # Real MIMIC-IV and eICU prediction CSVs used in regression tests
     ├── test_geometry.py
     ├── test_metrics.py
     └── test_cost.py
+└── busi_training/      # Experiments on Breast Ultrasound Images (BUSI) dataset 
+    ├── encode_busi.py  
+    ├── label_busi.py
+    ├── try_clf.py
+    └── train_busi_pca.py 
 ```
 
 ### `metrics.py` — VOROS scoring
@@ -48,6 +59,11 @@ scorer = make_pvoros_scorer(alpha=0.15, kappa_frac=0.5,
                              min_fp_cost_ratio=1/9, max_fp_cost_ratio=1/6)
 score = scorer(y_true, y_pred)
 ```
+
+### `metrics_jax.py` — VOROS scoring and soft pVOROS loss
+
+
+
 
 ### `cost.py` — deployment cost functions
 
