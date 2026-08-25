@@ -1,7 +1,5 @@
 import unittest
 import jax
-import _geometry_jax
-import _geometry
 import jax.numpy as jnp
 import numpy as np
 import time
@@ -10,7 +8,8 @@ import sys
 script_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(script_dir) 
 sys.path.append(parent_dir)
-import metrics_jax
+import _geometry_jax
+import _geometry
 
 class TestGeometry(unittest.TestCase):
     def test01_area_triangle(self):

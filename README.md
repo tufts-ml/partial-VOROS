@@ -40,7 +40,7 @@ Optimizing directly for confusion-matrix based metrics such as Partial VOROS is 
     ├── label_busi.py
     ├── try_clf.py
     └── train_busi_pca.py           # Experiments on Breast Ultrasound Images (BUSI) dataset
-├── jax_unittest/      # Unit tests for old Numpy vs. new JAX implementations 
+├── jax_unittest/      # Unit tests for old NumPy vs. new JAX implementations 
     ├── test_geometry.py
     ├── test_geometry_implem.py
     ├── test_jax_loss.py
