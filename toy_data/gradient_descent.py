@@ -3,7 +3,12 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from sklearn.metrics import auc
-from test_jax_loss import _theta_c_to_wb
+from pathlib import Path
+import os
+import sys
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir) 
+sys.path.append(parent_dir)
 from metrics_jax import compute_soft_roc, pv_loss_theta_c
 
 # Enable 64-bit precision in JAX
@@ -17,14 +22,16 @@ SEEDS = [
     'seed_701_501.npy'
 ]
 
-# --- VOROS & SIGMOID PARAMETERS ---
-KAPPA_FRAC = 0.5
-ALPHA = 0.6
-MIN_FP_COST_RATIO = 1/9
-MAX_FP_COST_RATIO = 1/6
-N_POINTS = 50
-SIGMOID_K = 50
-TEMP = 0.02
+PLOTS = Path("plots")
+PLOTS.mkdir(exist_ok=True)
+
+def _theta_c_to_wb(theta, c, M=1.0):
+    """Convert angular (theta, c) parametrization to (w, b) expected by pvoros_loss."""
+    w1 = M * jnp.sin(theta)
+    w2 = -M * jnp.cos(theta)
+    w_vec = jnp.array([w1, w2], dtype=jnp.float64)
+    b_val = jnp.array(M * c * jnp.cos(theta), dtype=jnp.float64)
+    return w_vec, b_val
 
 def compute_decision_scores(X, theta, c):
     """Computes continuous decision scores w · x + b."""
@@ -37,13 +44,21 @@ def wrap_to_pi(theta):
     return (theta + np.pi) % (2 * np.pi) - np.pi
 
 if __name__ == "__main__":
+    kappa_frac = 0.5
+    alpha = 0.6
+    min_fp = 1/9
+    max_fp = 1/6
+
+    N_POINTS = 50
+    SIGMOID_K = 50
+    TEMP = 0.02
     NUM_TRIALS = 10
     MAX_STEPS = 100
     LEARNING_RATE = 0.05
     grid_size = 30
 
     # Load metadata dictionary
-    data = np.load('heatmaps/sweep_meta_data.npy', allow_pickle=True).item()
+    data = np.load('sweep_meta_data.npy', allow_pickle=True).item()
     train_test = data['train_test']
     
     # Loss gradient setup wrt 'w' and 'b' using metrics_jax.pv_loss
@@ -55,8 +70,6 @@ if __name__ == "__main__":
     optimal_params = {}
 
     for seed in SEEDS:
-        alpha = 0.6
-        kappa_frac = 0.5
         print("\n" + "=" * 80)
         print(f"PROCESSING SEED: {seed}")
         print("=" * 80)
@@ -66,7 +79,7 @@ if __name__ == "__main__":
 
         P = int(np.sum(Y == 1)) 
         N = int(np.sum(Y == 0)) 
-        print(f"prevalence = {(P/(P+N)):.3f}")
+        print(f"Prevalence = {(P/(P+N)):.3f}")
         kappa = kappa_frac * (P + N)
 
         best_score = -np.inf
@@ -92,7 +105,7 @@ if __name__ == "__main__":
                 
                 # Compute loss and gradients using metrics_jax.pv_loss
                 loss_val, grads = loss_and_grad_wb(
-                    params, X, Y, P, N, kappa, ALPHA, MIN_FP_COST_RATIO, MAX_FP_COST_RATIO
+                    params, X, Y, P, N, kappa, alpha, min_fp, max_fp
                 )
 
                 params = {
@@ -104,6 +117,7 @@ if __name__ == "__main__":
                 param_history.append((float(params['theta']), float(params['c'])))
                 
             final_voros_score = -loss_history[-1]
+            print(f'Init {trial}: {final_voros_score :.3f}')
             
             trial_record = {
                 'trial_num': trial,
@@ -118,6 +132,7 @@ if __name__ == "__main__":
                 best_trial_idx = trial - 1
 
         best_data = all_trials_data[best_trial_idx]
+        print(f"Best trial: {best_trial_idx + 1}, Best pVOROS: {best_data['final_score'] :.3f}")
         optimal_theta = float(best_data['param_history'][-1, 0])
         optimal_c = float(best_data['param_history'][-1, 1])
 
@@ -132,7 +147,7 @@ if __name__ == "__main__":
         heatmap = np.zeros((grid_size, grid_size))
         for i in range(grid_size):
             for j in range(grid_size):
-                file_path = f"heatmaps/results_data/{seed}_res_{i}_{j}.txt"
+                file_path = f"results_data/{seed}_res_{i}_{j}.txt"
                 try:
                     with open(file_path, 'r') as f:
                         # Ensures correct array layout: heatmap[c_idx, theta_idx]
@@ -203,7 +218,7 @@ if __name__ == "__main__":
         plt.xlim(theta_min_deg, theta_max_deg)
         plt.ylim(c_min, c_max)
 
-        out_roc_pdf = f"plots/gradient_soft_pvoros_trajectory_{seed.replace('.npy', '')}.pdf"
+        out_roc_pdf = PLOTS / f"gradient_soft_pvoros_trajectory_{seed.replace('.npy', '')}.pdf"
         plt.savefig(out_roc_pdf, format='pdf', dpi=300)
         plt.close()
         print(f"Saved plot: {out_roc_pdf}")
@@ -224,7 +239,7 @@ if __name__ == "__main__":
 
         # 2. Alpha (Precision) Constraint Boundary
         prevalence = P / (P + N)
-        alpha_slope = ALPHA * (1 - prevalence) / (prevalence * (1 - ALPHA))
+        alpha_slope = alpha * (1 - prevalence) / (prevalence * (1 - alpha))
         
         fpr_grid = np.linspace(0, 1, 200)
         tpr_alpha_bound = alpha_slope * fpr_grid
@@ -235,7 +250,7 @@ if __name__ == "__main__":
         )
 
         # 3. Kappa (Capacity / Alarm Budget) Constraint Boundary
-        kappa = KAPPA_FRAC * (P + N)
+        kappa = kappa_frac * (P + N)
         kappa_slope = -(N / P)
         tpr_kappa_bound = kappa_slope * fpr_grid + (kappa / P)
 
@@ -274,7 +289,7 @@ if __name__ == "__main__":
         plt.legend(loc='lower right', frameon=True, facecolor='white', framealpha=0.9, fontsize=10)
         
         plt.tight_layout()
-        out_roc_pdf = f"plots/roc_dual_slope_bounded_{seed.replace('.npy', '')}.pdf"
+        out_roc_pdf = PLOTS / f"roc_dual_slope_bounded_{seed.replace('.npy', '')}.pdf"
         plt.savefig(out_roc_pdf, format='pdf', dpi=300)
         plt.close()
         print(f"Saved plot: {out_roc_pdf}")
