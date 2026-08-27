@@ -12,18 +12,22 @@ from train_busi_pca import (
     load_embeddings_and_labels, 
     init_params, 
     compute_pvoros_metric, 
-    bce_loss_fn
+    bce_loss_fn,
+    train_logreg_pv,
+    train_logreg_pv_from_bce_init,
+    train_baseline_bce_methods
 )
 from pathlib import Path
 import pandas as pd
 
 DATA_DIR = Path("busi_training/busi_embeddings")
 RESULTS_DIR = Path("busi_training/results")
-GRIDSEARCH_DIR = RESULTS_DIR / "gs_a0.4_k1.0_min1-9_max1-6"
+GRIDSEARCH_DIR = RESULTS_DIR / "gs_a0_k0.5_1-9_1-6"
 
 VAL_FRACTION = 0.20
 TEST_FRACTION = 0.20
 SPLIT_SEED = 0
+EPOCHS=100
 
 
 def load_all_validation_results():
@@ -138,20 +142,13 @@ def eval_test():
     print("=" * 80)
 
     all_feats, all_labels = load_embeddings_and_labels(DATA_DIR)
-    
-    # Standard 60% Train, 20% Val, 20% Test Split
-    X_train_val, X_test_raw, y_train_val, y_test = split_train_val_test(all_feats, all_labels)
-    relative_val_frac = VAL_FRACTION / (1.0 - TEST_FRACTION)
-    
-    X_train_raw, X_val_raw, y_train, y_val = split_train_val_test(
-        X_train_val, y_train_val, val_frac=relative_val_frac, test_frac=0.0, seed=SPLIT_SEED
-    )[:4]
+    X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_val_test(all_feats, all_labels)
 
     master_df = load_all_validation_results()
     best_configs = get_best_hyperparameters(master_df)
 
-    alpha, kappa_frac, min_fp, max_fp = 0.6, 0.5, 1 / 9, 1 / 6
-    pca_dimensions = [None, 2, 30, 120]
+    alpha, kappa_frac, min_fp, max_fp = 0.4, 1.0, 1 / 9, 1 / 6
+    pca_dimensions = [30]
     test_summary = []
 
     for dim in pca_dimensions:
@@ -173,36 +170,33 @@ def eval_test():
         x_test_jax = jnp.asarray(X_te_proc, dtype=jnp.float64)
 
         # 1. Method 1: PV Random Init
-        pv_rand_params = fit_and_train_final_model_with_checkpointing(
-            X_tr_proc, y_train, X_va_proc, y_val, "pv_rand", 
-            cfg['PV (Random Init)']['s'], cfg['PV (Random Init)']['w'],
-            alpha, kappa_frac, min_fp, max_fp
-        )
+        
+
+        pv_rand_params, pv_rand_histories = train_logreg_pv(X_tr_proc, y_train, X_va_proc, y_val, 
+                                         alpha, kappa_frac, min_fp, max_fp, 
+                                         epochs=100, 
+                                         lr=cfg['PV (Random Init)']['s'], wd=cfg['PV (Random Init)']['w'])
         score_pv_rand = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
 
         # 2. Method 2: PV BCE Init
-        pv_bce_params = fit_and_train_final_model_with_checkpointing(
-            X_tr_proc, y_train, X_va_proc, y_val, "pv_bce", 
-            cfg['PV (BCE Init)']['s'], cfg['PV (BCE Init)']['w'],
-            alpha, kappa_frac, min_fp, max_fp
-        )
-        score_pv_bce = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        # pv_bce_params = fit_and_train_final_model_with_checkpointing(
+        #     X_tr_proc, y_train, X_va_proc, y_val, "pv_bce", 
+        #     cfg['PV (BCE Init)']['s'], cfg['PV (BCE Init)']['w'],
+        #     alpha, kappa_frac, min_fp, max_fp
+        # )
+        bce_std_params, bce_monitored_params, bce_history = train_baseline_bce_methods(
+                            X_tr_proc, y_train, X_va_proc, y_val, alpha, kappa_frac, min_fp, max_fp,
+                            epochs=EPOCHS, lr=cfg['BCE (Std Val BCE)']['s'], wd=cfg['BCE (Std Val BCE)']['w']
+                        )
 
-        # 3. Method 3: BCE Standard
-        bce_std_params = fit_and_train_final_model_with_checkpointing(
-            X_tr_proc, y_train, X_va_proc, y_val, "bce_std", 
-            cfg['BCE (Std Val BCE)']['s'], cfg['BCE (Std Val BCE)']['w'],
-            alpha, kappa_frac, min_fp, max_fp
-        )
         score_bce_std = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        score_bce_mon = compute_pvoros_metric(bce_monitored_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
 
-        # 4. Method 4: BCE Monitored
-        bce_mon_params = fit_and_train_final_model_with_checkpointing(
-            X_tr_proc, y_train, X_va_proc, y_val, "bce_monitored", 
-            cfg['BCE (Monitored PV)']['s'], cfg['BCE (Monitored PV)']['w'],
-            alpha, kappa_frac, min_fp, max_fp
-        )
-        score_bce_mon = compute_pvoros_metric(bce_mon_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+        pv_bce_params, pv_bce_history = train_logreg_pv_from_bce_init(
+                    X_tr_proc, y_train, X_va_proc, y_val, bce_std_params, alpha, kappa_frac, min_fp, max_fp,
+                    epochs=EPOCHS, lr=cfg['PV (BCE Init)']['s'], wd=cfg['PV (BCE Init)']['w']
+                )
+        score_pv_bce = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
 
         test_summary.append({
             "Representation": ds_name,
@@ -213,7 +207,7 @@ def eval_test():
         })
 
     df_test = pd.DataFrame(test_summary)
-    test_out_path = RESULTS_DIR / "gridsearch_test_evaluation_summary.csv"
+    test_out_path = GRIDSEARCH_DIR / "gridsearch_test_evaluation_summary.csv"
     df_test.to_csv(test_out_path, index=False)
 
     print("\n" + "=" * 105)

@@ -191,5 +191,7 @@ busi_training/busi_embeddings
 busi_training/results
 logs
 
+toy_data/
+plots/
 
 *.zip

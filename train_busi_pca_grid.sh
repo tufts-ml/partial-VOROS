@@ -17,6 +17,9 @@ fi
 declare -a weight_decay=(0.0001 0.0005 0.001 0.005 0.01 0.05 0.1 0)
 declare -a step_size=(0.000001 0.00001 0.0001 0.001 0.01 0.1)
 
+# declare -a weight_decay=(0 1e-5 1e-4 1e-3 1e-2)
+# declare -a step_size=(1e-5 1e-4 1e-3 1e-2)
+
 # declare -a weight_decay=(1e-3)
 # declare -a num_iter=(25)
 # declare -a step_size=(0.00001)
