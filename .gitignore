@@ -191,3 +191,8 @@ busi_training/busi_embeddings
 busi_training/results
 
 *.zip
+
+logs
+plots
+toy_data/results_data
+toy_data/results_data_soft_pv
