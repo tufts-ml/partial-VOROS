@@ -61,81 +61,6 @@ def get_best_hyperparameters(master_df):
     return best_configs
 
 
-def fit_and_train_final_model_with_checkpointing(
-    X_tr, y_tr, X_va, y_va, method_type, lr, weight_decay, alpha, kappa_frac, min_fp, max_fp, epochs=100
-):
-    """Retrains on Train (60%) and monitors Val (20%) to save the best checkpoint."""
-    x_tr, y_tr_j = jnp.asarray(X_tr, dtype=jnp.float64), jnp.asarray(y_tr, dtype=jnp.float64)
-    x_va, y_va_j = jnp.asarray(X_va, dtype=jnp.float64), jnp.asarray(y_va, dtype=jnp.float64)
-    P_tr, N_tr = jnp.sum(y_tr_j == 1.0), jnp.sum(y_tr_j == 0.0)
-    kappa_tr = kappa_frac * (P_tr + N_tr)
-
-    # ------------------------------------------------------------------
-    # Method 3 & 4: Standard BCE and Monitored BCE
-    # ------------------------------------------------------------------
-    if method_type in ["bce_std", "bce_monitored"]:
-        optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(learning_rate=lr))
-        params = init_params(jax.random.PRNGKey(SPLIT_SEED), x_tr.shape[1])
-        opt_state = optimizer.init(params)
-        
-        best_params = params
-        best_metric = float("inf") if method_type == "bce_std" else -float("inf")
-
-        for ep in range(1, epochs + 1):
-            _, grads = jax.value_and_grad(bce_loss_fn)(params, x_tr, y_tr_j)
-            updates, opt_state = optimizer.update(grads, opt_state, params=params)
-            params = optax.apply_updates(params, updates)
-
-            if method_type == "bce_std":
-                va_bce_loss = float(bce_loss_fn(params, x_va, y_va_j))
-                if va_bce_loss < best_metric:
-                    best_metric = va_bce_loss
-                    best_params = params
-            elif method_type == "bce_monitored" and ep % 10 == 0:
-                va_pv = compute_pvoros_metric(params, x_va, y_va, alpha, kappa_frac, min_fp, max_fp)
-                if va_pv > best_metric:
-                    best_metric = va_pv
-                    best_params = params
-
-        return best_params
-
-    # ------------------------------------------------------------------
-    # Method 1 & 2: Soft PV Loss (Random vs BCE Init)
-    # ------------------------------------------------------------------
-    optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(learning_rate=lr, weight_decay=weight_decay))
-
-    if method_type == "pv_bce":
-        bce_init = fit_and_train_final_model_with_checkpointing(
-            X_tr, y_tr, X_va, y_va, "bce_std", lr, weight_decay, alpha, kappa_frac, min_fp, max_fp, epochs
-        )
-        params = {"w": jnp.asarray(bce_init["w"]), "b": jnp.asarray(bce_init["b"])}
-    else:
-        params = init_params(jax.random.PRNGKey(SPLIT_SEED), x_tr.shape[1])
-
-    opt_state = optimizer.init(params)
-    best_params = params
-    best_val_pv = compute_pvoros_metric(params, x_va, y_va, alpha, kappa_frac, min_fp, max_fp)
-
-    def pure_loss_fn(p):
-        return pv_loss_fixed_thresh(p, x_tr, y_tr_j, P_tr, N_tr, kappa_tr, alpha, min_fp, max_fp)
-
-    @jax.jit
-    def train_step(p, state):
-        loss, grads = jax.value_and_grad(pure_loss_fn)(p)
-        updates, state = optimizer.update(grads, state, params=p)
-        return optax.apply_updates(p, updates), state
-
-    for ep in range(1, epochs + 1):
-        params, opt_state = train_step(params, opt_state)
-        if ep % 10 == 0:
-            va_pv = compute_pvoros_metric(params, x_va, y_va, alpha, kappa_frac, min_fp, max_fp)
-            if va_pv > best_val_pv:
-                best_val_pv = va_pv
-                best_params = params
-
-    return best_params
-
-
 def eval_test():
     print("=" * 80)
     print("      AGGREGATING CV HYPERPARAMETERS & RETRAINING WITH VAL CHECKPOINTING")
@@ -154,6 +79,7 @@ def eval_test():
     for dim in pca_dimensions:
         ds_name = f"Full ({X_train_raw.shape[1]}D)" if dim is None else f"PCA {dim}D"
         cfg = best_configs[ds_name]
+        print(cfg)
 
         # Fit transformers strictly on 60% Train
         scaler = StandardScaler()
@@ -184,12 +110,17 @@ def eval_test():
         #     cfg['PV (BCE Init)']['s'], cfg['PV (BCE Init)']['w'],
         #     alpha, kappa_frac, min_fp, max_fp
         # )
-        bce_std_params, bce_monitored_params, bce_history = train_baseline_bce_methods(
+        bce_std_params, _, bce_history = train_baseline_bce_methods(
                             X_tr_proc, y_train, X_va_proc, y_val, alpha, kappa_frac, min_fp, max_fp,
                             epochs=EPOCHS, lr=cfg['BCE (Std Val BCE)']['s'], wd=cfg['BCE (Std Val BCE)']['w']
                         )
 
         score_bce_std = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+
+        _, bce_monitored_params, bce_monitored_history = train_baseline_bce_methods(
+                            X_tr_proc, y_train, X_va_proc, y_val, alpha, kappa_frac, min_fp, max_fp,
+                            epochs=EPOCHS, lr=cfg['BCE (Monitored PV)']['s'], wd=cfg['BCE (Monitored PV)']['w']
+                        )
         score_bce_mon = compute_pvoros_metric(bce_monitored_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
 
         pv_bce_params, pv_bce_history = train_logreg_pv_from_bce_init(
@@ -197,7 +128,7 @@ def eval_test():
                     epochs=EPOCHS, lr=cfg['PV (BCE Init)']['s'], wd=cfg['PV (BCE Init)']['w']
                 )
         score_pv_bce = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
-
+        print(bce_std_params, bce_monitored_params)
         test_summary.append({
             "Representation": ds_name,
             "PV (Rand) Test %": f"{score_pv_rand * 100:.2f}%",

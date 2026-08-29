@@ -28,7 +28,7 @@ DATA_DIR = Path("busi_training/busi_embeddings")
 RESULTS_DIR = Path("busi_training/results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
-GRIDSEARCH_DIR = RESULTS_DIR / "gs_a0_k0.5_1-9_1-6"
+GRIDSEARCH_DIR = RESULTS_DIR / "replicate_results"
 GRIDSEARCH_DIR.mkdir(parents=True, exist_ok=True)
 
 VAL_FRACTION = 0.20
@@ -396,7 +396,7 @@ def experiment():
     X_train_raw, _, _, y_train, _, _ = split_train_val_test(all_feats, all_labels)
 
     pca_dimensions = [30]
-    alpha, kappa_frac, min_fp, max_fp, epochs = 0, 0.5, 1 / 9, 1 / 6, 100
+    alpha, kappa_frac, min_fp, max_fp, epochs = 0.4, 1.0, 1 / 9, 1 / 6, 100
 
     val_records = []
     skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=SPLIT_SEED)
