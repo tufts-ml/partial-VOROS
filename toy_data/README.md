@@ -6,7 +6,7 @@
 - Run:
   ```
   bash w1w2_sweep.sh (sigmoid)      # computes (soft) pVOROS score across grid of parameters
-  python make_plot.py --filepath    # creates heatmap plot
+  python make_plot.py (--pvoros soft)    # creates heatmap plot from w1w2_sweep
   python 1d_plot.py                 # plots pvoros score against a fixed weight
   ```               
 
