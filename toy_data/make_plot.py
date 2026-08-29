@@ -5,6 +5,20 @@ Make heatmaps using results of w1w2_sweep.sh
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
+from pathlib import Path
+
+dir = None
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--pvoros', type=str, default='hard')
+args = parser.parse_args()
+if args.pvoros == 'soft':
+    dir = Path('results_data_soft_pv')
+else:
+    dir = Path('results_data')
+dir.mkdir(exist_ok=True)
+
 
 data = np.load('sweep_meta_data.npy', allow_pickle=True).item()
 clfs = data['clfs']
@@ -30,7 +44,7 @@ for ax, seed in zip(axs.flat, clfs):
     
     for i in range(grid_size):
         for j in range(grid_size):
-            file_path = f"results_data_soft_pv/{seed}_res_{i}_{j}.txt"
+            file_path = dir / f"{seed}_res_{i}_{j}.txt"
             try:
                 with open(file_path, 'r') as f:
                     heatmap[i, j] = float(f.read().strip())
@@ -45,7 +59,10 @@ for ax, seed in zip(axs.flat, clfs):
     fig.colorbar(im, ax=ax, label='pVOROS score')
     ax.set_xlabel('Angle (Degrees)')
     ax.set_ylabel('y-intercept (c)')
-    ax.set_title(f'Soft pVOROS (Sigmoid K=50): {seed}')
+    if args.pvoros == "soft":
+        ax.set_title(f'Soft pVOROS: {seed}')
+    else:
+        ax.set_title(f'True pVOROS: {seed}')
     
     # # Plot baseline anchor point
     # ax.scatter([np.degrees(theta_center)], [c_center], color='white', edgecolor='black', s=80, label='Trained')
@@ -53,5 +70,9 @@ for ax, seed in zip(axs.flat, clfs):
 
 axs.flat[-1].set_visible(False)
 plt.tight_layout()
-plt.savefig('soft_pv_k=50_npoints=1000.pdf', format='pdf', dpi=300)
+
+if args.pvoros == 'soft':
+    plt.savefig('soft_pv_heatmap.pdf', format='pdf', dpi=300)
+else:
+    plt.savefig('hard_pv_heatmap.pdf', format='pdf', dpi=300)
 plt.show()
