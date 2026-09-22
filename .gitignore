@@ -191,3 +191,6 @@ busi_training/busi_embeddings
 busi_training/results
 
 *.zip
+
+cc_fraud/data
+cc_fraud/results
