@@ -559,6 +559,21 @@ def tune_lr_with_cv(X, y, model_name, alpha, kappa_frac, min_fp, max_fp, candida
         wd_candidates = WD_CANDIDATES
 
     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=SPLIT_SEED)
+    fold_splits = list(cv.split(X, y))
+
+    # For pv_bce, pretrain the BCE initializer once per fold (it doesn't depend
+    # on the lr/wd grid being swept below), then reuse it across the grid.
+    bce_init_by_fold = None
+    if model_name == "pv_bce":
+        bce_init_by_fold = []
+        for train_idx, valid_idx in fold_splits:
+            X_tr, X_va = X[train_idx], X[valid_idx]
+            y_tr, y_va = y[train_idx], y[valid_idx]
+            bce_init_params, _, _ = train_baseline_bce_methods(
+                X_tr, y_tr, X_va, y_va, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS
+            )
+            bce_init_by_fold.append(bce_init_params)
+
     grid_scores = {}
     best_lr = candidate_lrs[0]
     best_wd = wd_candidates[0]
@@ -567,7 +582,7 @@ def tune_lr_with_cv(X, y, model_name, alpha, kappa_frac, min_fp, max_fp, candida
     for lr in candidate_lrs:
         for wd in wd_candidates:
             fold_scores = []
-            for train_idx, valid_idx in cv.split(X, y):
+            for fold_idx, (train_idx, valid_idx) in enumerate(fold_splits):
                 X_tr, X_va = X[train_idx], X[valid_idx]
                 y_tr, y_va = y[train_idx], y[valid_idx]
 
@@ -579,7 +594,7 @@ def tune_lr_with_cv(X, y, model_name, alpha, kappa_frac, min_fp, max_fp, candida
                     score = max(run["history"]["best_val_pvoros"] for run in histories)
                 elif model_name == "pv_bce":
                     _, history = train_logreg_pv_from_bce_init(
-                        X_tr, y_tr, X_va, y_va, init_params(jax.random.PRNGKey(SPLIT_SEED), X_tr.shape[1]),
+                        X_tr, y_tr, X_va, y_va, bce_init_by_fold[fold_idx],
                         alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=lr, weight_decay=wd
                     )
                     score = history["best_val_pvoros"]
@@ -588,6 +603,16 @@ def tune_lr_with_cv(X, y, model_name, alpha, kappa_frac, min_fp, max_fp, candida
                         X_tr, y_tr, X_va, y_va, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=lr, weight_decay=wd
                     )
                     score = history["best_val_pvoros"]
+                elif model_name == "bce_baseline":
+                    # Pure BCE baseline: train AND validate on BCE loss only (no pVOROS
+                    # involved in hyperparameter selection). pVOROS is used solely as
+                    # the held-out TEST objective, computed later in main().
+                    _, _, history = train_baseline_bce_methods(
+                        X_tr, y_tr, X_va, y_va, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=lr, weight_decay=wd
+                    )
+                    # Lower val BCE loss is better; negate so "higher score is better"
+                    # still holds for the max-based selection below.
+                    score = -history["best_val_bce_loss"]
                 else:
                     raise ValueError(f"Unknown model_name: {model_name}")
 
@@ -595,7 +620,10 @@ def tune_lr_with_cv(X, y, model_name, alpha, kappa_frac, min_fp, max_fp, candida
 
             mean_score = float(np.mean(fold_scores))
             grid_scores[(lr, wd)] = mean_score
-            print(f"[CV Tune] {model_name:12s} | lr={lr:.1e} wd={wd:.1e} | mean val pVOROS={mean_score:.4f}")
+            if model_name == "bce_baseline":
+                print(f"[CV Tune] {model_name:12s} | lr={lr:.1e} wd={wd:.1e} | mean val BCE loss={-mean_score:.4f}")
+            else:
+                print(f"[CV Tune] {model_name:12s} | lr={lr:.1e} wd={wd:.1e} | mean val pVOROS={mean_score:.4f}")
 
             if mean_score > best_score:
                 best_score = mean_score
@@ -694,104 +722,124 @@ def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=C
         configs_to_run = CONFIGS
 
     for constraint in configs_to_run:
-            min_fp = constraint["min_fp"]
-            max_fp = constraint["max_fp"]
-            alpha = constraint["alpha"]
-            kappa_frac = constraint["kappa_frac"]
-            config_label = _config_label(alpha, kappa_frac, min_fp, max_fp)
-            config_results_dir = RESULTS_DIR / config_label
-            config_results_dir.mkdir(parents=True, exist_ok=True)
-            results_summary[config_label] = {}
+        min_fp = constraint["min_fp"]
+        max_fp = constraint["max_fp"]
+        alpha = constraint["alpha"]
+        kappa_frac = constraint["kappa_frac"]
+        config_label = _config_label(alpha, kappa_frac, min_fp, max_fp)
+        config_results_dir = RESULTS_DIR / config_label
+        config_results_dir.mkdir(parents=True, exist_ok=True)
+        results_summary[config_label] = {}
 
-            print("\n" + "#" * 90)
-            print(
-                f"  CONSTRAINT CONFIG: alpha={alpha}, kappa_frac={kappa_frac}, "
-                f"min_fp={min_fp}, max_fp={max_fp}"
+        print("\n" + "#" * 90)
+        print(
+            f"  CONSTRAINT CONFIG: alpha={alpha}, kappa_frac={kappa_frac}, "
+            f"min_fp={min_fp}, max_fp={max_fp}"
+        )
+        print("#" * 90)
+
+        for name, (X_train, X_val, X_test) in datasets.items():
+            print("\n" + "=" * 65)
+            print(f"        RUNNING EXPERIMENT: {name}")
+            print(f"        Config: {config_label}")
+            print("=" * 65)
+
+            pv_rand_lr, pv_rand_wd, _ = tune_lr_with_cv(
+                X_train, y_train, "pv_rand", alpha, kappa_frac, min_fp, max_fp,
+                candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds
             )
-            print("#" * 90)
+            pv_bce_lr, pv_bce_wd, _ = tune_lr_with_cv(
+                X_train, y_train, "pv_bce", alpha, kappa_frac, min_fp, max_fp,
+                candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds
+            )
+            bce_lr, bce_wd, _ = tune_lr_with_cv(
+                X_train, y_train, "bce", alpha, kappa_frac, min_fp, max_fp,
+                candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds
+            )
+            bce_baseline_lr, bce_baseline_wd, _ = tune_lr_with_cv(
+                X_train, y_train, "bce_baseline", alpha, kappa_frac, min_fp, max_fp,
+                candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds
+            )
 
-            for name, (X_train, X_val, X_test) in datasets.items():
-                print("\n" + "=" * 65)
-                print(f"        RUNNING EXPERIMENT: {name}")
-                print(f"        Config: {config_label}")
-                print("=" * 65)
+            print(
+                f"[Selected LRs] PV random: {pv_rand_lr:.1e} | PV BCE init: {pv_bce_lr:.1e} | "
+                f"BCE: {bce_lr:.1e} | BCE (baseline): {bce_baseline_lr:.1e}"
+            )
 
-                pv_rand_lr, pv_rand_wd, _ = tune_lr_with_cv(
-                    X_train, y_train, "pv_rand", alpha, kappa_frac, min_fp, max_fp,
-                    candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds
-                )
-                pv_bce_lr, pv_bce_wd, _ = tune_lr_with_cv(
-                    X_train, y_train, "pv_bce", alpha, kappa_frac, min_fp, max_fp,
-                    candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds
-                )
-                bce_lr, bce_wd, _ = tune_lr_with_cv(
-                    X_train, y_train, "bce", alpha, kappa_frac, min_fp, max_fp,
-                    candidate_lrs=lr_candidates, wd_candidates=wd_candidates, n_splits=cv_folds
-                )
+            # 1. Method 1: Soft PV Loss (Random Initializations)
+            pv_rand_params, pv_rand_histories = train_logreg_pv(
+                X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp,
+                epochs=EPOCHS, lr=pv_rand_lr, n_restarts=1, weight_decay=pv_rand_wd
+            )
 
-                print(f"[Selected LRs] PV random: {pv_rand_lr:.1e} | PV BCE init: {pv_bce_lr:.1e} | BCE: {bce_lr:.1e}")
+            # 2. Methods 3 & 4: Standard BCE Training
+            bce_std_params, bce_monitored_params, bce_history = train_baseline_bce_methods(
+                X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp,
+                epochs=EPOCHS, lr=bce_lr, weight_decay=bce_wd
+            )
 
-                # 1. Method 1: Soft PV Loss (Random Initializations)
-                pv_rand_params, pv_rand_histories = train_logreg_pv(
-                    X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp,
-                    epochs=EPOCHS, lr=pv_rand_lr, n_restarts=1, weight_decay=pv_rand_wd
-                )
+            # 3. Method 2: Soft PV Loss (BCE Checkpoint Initializer)
+            pv_bce_params, pv_bce_history = train_logreg_pv_from_bce_init(
+                X_train, y_train, X_val, y_val, bce_std_params, alpha, kappa_frac, min_fp, max_fp,
+                epochs=EPOCHS, lr=pv_bce_lr, weight_decay=pv_bce_wd
+            )
 
-                # 2. Methods 3 & 4: Standard BCE Training
-                bce_std_params, bce_monitored_params, bce_history = train_baseline_bce_methods(
-                    X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp,
-                    epochs=EPOCHS, lr=bce_lr, weight_decay=bce_wd
-                )
+            # 3b. Method 5: Pure BCE Baseline. Train objective = BCE, validation
+            # objective (both checkpoint selection AND LR/WD tuning above) = BCE,
+            # test objective = pVOROS only. Trained/tuned independently of the
+            # other BCE-based methods above (which tune via val pVOROS).
+            bce_baseline_params, _, bce_baseline_history = train_baseline_bce_methods(
+                X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp,
+                epochs=EPOCHS, lr=bce_baseline_lr, weight_decay=bce_baseline_wd
+            )
 
-                # 3. Method 2: Soft PV Loss (BCE Checkpoint Initializer)
-                pv_bce_params, pv_bce_history = train_logreg_pv_from_bce_init(
-                    X_train, y_train, X_val, y_val, bce_std_params, alpha, kappa_frac, min_fp, max_fp,
-                    epochs=EPOCHS, lr=pv_bce_lr, weight_decay=pv_bce_wd
-                )
+            # 4. Generate Training Trace Plots
+            plot_training_traces(pv_rand_histories, pv_bce_history, bce_history, name, config_results_dir)
 
-                # 4. Generate Training Trace Plots
-                plot_training_traces(pv_rand_histories, pv_bce_history, bce_history, name, config_results_dir)
+            # 5. Generate ROC Curve Plot with Feasible Region and Iso-performance Lines
+            x_val_jax = jnp.asarray(X_val, dtype=jnp.float32)
+            pv_rand_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_rand_params["w"]) + pv_rand_params["b"])
+            bce_monitored_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, bce_monitored_params["w"]) + bce_monitored_params["b"])
+            pv_bce_init_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_bce_params["w"]) + pv_bce_params["b"])
 
-                # 5. Generate ROC Curve Plot with Feasible Region and Iso-performance Lines
-                x_val_jax = jnp.asarray(X_val, dtype=jnp.float32)
-                pv_rand_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_rand_params["w"]) + pv_rand_params["b"])
-                bce_monitored_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, bce_monitored_params["w"]) + bce_monitored_params["b"])
-                pv_bce_init_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_bce_params["w"]) + pv_bce_params["b"])
+            plot_roc_bounds_figure(
+                y_val=y_val,
+                y_pred_pv=np.asarray(pv_rand_val_preds),
+                y_pred_bce_monitored=np.asarray(bce_monitored_val_preds),
+                y_pred_pv_bce_init=np.asarray(pv_bce_init_preds),
+                dataset_name=name,
+                results_dir=config_results_dir,
+                alpha=alpha, kappa_frac=kappa_frac, min_fp=min_fp, max_fp=max_fp
+            )
 
-                plot_roc_bounds_figure(
-                    y_val=y_val,
-                    y_pred_pv=np.asarray(pv_rand_val_preds),
-                    y_pred_bce_monitored=np.asarray(bce_monitored_val_preds),
-                    y_pred_pv_bce_init=np.asarray(pv_bce_init_preds),
-                    dataset_name=name,
-                    results_dir=config_results_dir,
-                    alpha=alpha, kappa_frac=kappa_frac, min_fp=min_fp, max_fp=max_fp
-                )
+            # 6. Evaluate TEST Set pVOROS metrics for ALL 4 METHODS
+            x_test_jax = jnp.asarray(X_test, dtype=jnp.float32)
+            pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+            pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+            bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+            bce_monitored_test_score = compute_pvoros_metric(bce_monitored_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+            bce_baseline_test_score = compute_pvoros_metric(bce_baseline_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
 
-                # 6. Evaluate TEST Set pVOROS metrics for ALL 4 METHODS
-                x_test_jax = jnp.asarray(X_test, dtype=jnp.float32)
-                pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
-                pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
-                bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
-                bce_monitored_test_score = compute_pvoros_metric(bce_monitored_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
+            results_summary[config_label][name] = {
+                "pv_rand_test": float(pv_rand_test_score) * 100,
+                "pv_bce_test": float(pv_bce_test_score) * 100,
+                "bce_std_test": float(bce_std_test_score) * 100,
+                "bce_monitored_test": float(bce_monitored_test_score) * 100,
+                "bce_baseline_test": float(bce_baseline_test_score) * 100,
+            }
 
-                results_summary[config_label][name] = {
-                    "pv_rand_test": float(pv_rand_test_score) * 100,
-                    "pv_bce_test": float(pv_bce_test_score) * 100,
-                    "bce_std_test": float(bce_std_test_score) * 100,
-                    "bce_monitored_test": float(bce_monitored_test_score) * 100,
-                }
-
-                # Cache model weights
-                dim_label = name.split()[1] if "PCA" in name else "full"
-                np.save(config_results_dir / f"pv_rand_w_{dim_label}.npy", np.asarray(pv_rand_params["w"]))
-                np.save(config_results_dir / f"pv_rand_b_{dim_label}.npy", np.asarray(pv_rand_params["b"]))
-                np.save(config_results_dir / f"pv_bce_w_{dim_label}.npy", np.asarray(pv_bce_params["w"]))
-                np.save(config_results_dir / f"pv_bce_b_{dim_label}.npy", np.asarray(pv_bce_params["b"]))
-                np.save(config_results_dir / f"bce_std_w_{dim_label}.npy", np.asarray(bce_std_params["w"]))
-                np.save(config_results_dir / f"bce_std_b_{dim_label}.npy", np.asarray(bce_std_params["b"]))
-                np.save(config_results_dir / f"bce_monitored_w_{dim_label}.npy", np.asarray(bce_monitored_params["w"]))
-                np.save(config_results_dir / f"bce_monitored_b_{dim_label}.npy", np.asarray(bce_monitored_params["b"]))
+            # Cache model weights
+            dim_label = name.split()[1] if "PCA" in name else "full"
+            np.save(config_results_dir / f"pv_rand_w_{dim_label}.npy", np.asarray(pv_rand_params["w"]))
+            np.save(config_results_dir / f"pv_rand_b_{dim_label}.npy", np.asarray(pv_rand_params["b"]))
+            np.save(config_results_dir / f"pv_bce_w_{dim_label}.npy", np.asarray(pv_bce_params["w"]))
+            np.save(config_results_dir / f"pv_bce_b_{dim_label}.npy", np.asarray(pv_bce_params["b"]))
+            np.save(config_results_dir / f"bce_std_w_{dim_label}.npy", np.asarray(bce_std_params["w"]))
+            np.save(config_results_dir / f"bce_std_b_{dim_label}.npy", np.asarray(bce_std_params["b"]))
+            np.save(config_results_dir / f"bce_monitored_w_{dim_label}.npy", np.asarray(bce_monitored_params["w"]))
+            np.save(config_results_dir / f"bce_monitored_b_{dim_label}.npy", np.asarray(bce_monitored_params["b"]))
+            np.save(config_results_dir / f"bce_baseline_w_{dim_label}.npy", np.asarray(bce_baseline_params["w"]))
+            np.save(config_results_dir / f"bce_baseline_b_{dim_label}.npy", np.asarray(bce_baseline_params["b"]))
 
     # Summary Table
     print("\n" + "=" * 90)
@@ -801,7 +849,7 @@ def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=C
         print("\n" + "-" * 90)
         print(f"Config: {config_label}")
         print("-" * 90)
-        print(f"{'Representation':<22} | {'PV (Random Init)':<17} | {'PV (BCE Init)':<15} | {'BCE (Std Val BCE)':<18} | {'BCE (Monitored PV)':<18}")
+        print(f"{'Representation':<22} | {'PV (Random Init)':<17} | {'PV (BCE Init)':<15} | {'BCE (Std Val BCE)':<18} | {'BCE (Monitored PV)':<18} | {'BCE (Baseline)':<15}")
         print("-" * 90)
         for name, metrics in config_results.items():
             print(
@@ -809,7 +857,8 @@ def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=C
                 f"{metrics['pv_rand_test']:17.2f}% | "
                 f"{metrics['pv_bce_test']:15.2f}% | "
                 f"{metrics['bce_std_test']:18.2f}% | "
-                f"{metrics['bce_monitored_test']:18.2f}%"
+                f"{metrics['bce_monitored_test']:18.2f}% | "
+                f"{metrics['bce_baseline_test']:15.2f}%"
             )
     print("=" * 90)
 
