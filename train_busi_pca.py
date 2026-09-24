@@ -89,8 +89,8 @@ def load_embeddings_and_labels(root: Path):
 
 def init_params(key, dim):
     return {
-        "w": jax.random.normal(key, (dim,), dtype=jnp.float32) * 0.01,
-        "b": jnp.array(0.0, dtype=jnp.float32),
+        "w": jax.random.normal(key, (dim,), dtype=jnp.float64) * 0.01,
+        "b": jnp.array(0.0, dtype=jnp.float64),
     }
 
 
@@ -164,8 +164,8 @@ def plot_iso_performance_lines(ax, hull_pts, P, N, fp_cost_ratios=None, x_min=0.
 
 def plot_roc_bounds_figure(y_val, y_pred_pv, y_pred_bce_monitored, y_pred_pv_bce_init, dataset_name, results_dir, alpha, kappa_frac, min_fp, max_fp):
     """Plots empirical ROC with alpha and kappa feasible bounds and iso-performance lines."""
-    y_val_jax = jnp.asarray(y_val, dtype=jnp.float32)
-    y_pred_pv_jax = jnp.asarray(y_pred_pv, dtype=jnp.float32)
+    y_val_jax = jnp.asarray(y_val, dtype=jnp.float64)
+    y_pred_pv_jax = jnp.asarray(y_pred_pv, dtype=jnp.float64)
 
     fprs_emp, tprs_emp, _ = roc_curve(y_val, y_pred_pv)
     fprs_emp_bce, tprs_emp_bce, _ = roc_curve(y_val, y_pred_bce_monitored)
@@ -253,8 +253,8 @@ def train_logreg_pv(
     inits_per_seed=10, 
     weight_decay=1e-2):
     """Method 1: Full-batch Soft PV Loss from Random Initializations."""
-    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
-    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -365,8 +365,8 @@ def train_logreg_pv_from_bce_init(
     lr=LR, 
     weight_decay=1e-2):
     """Method 2: Full-batch Soft PV Loss starting from BCE Initializer."""
-    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
-    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -383,8 +383,8 @@ def train_logreg_pv_from_bce_init(
 
     # Initialize with BCE params
     params = {
-        "w": jnp.asarray(bce_init_params["w"], dtype=jnp.float32),
-        "b": jnp.asarray(bce_init_params["b"], dtype=jnp.float32),
+        "w": jnp.asarray(bce_init_params["w"], dtype=jnp.float64),
+        "b": jnp.asarray(bce_init_params["b"], dtype=jnp.float64),
     }
     opt_state = optimizer.init(params)
 
@@ -443,8 +443,8 @@ def train_logreg_pv_from_bce_init(
 
 def train_baseline_bce_methods(X_train, y_train, X_val, y_val, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=1e-2, weight_decay=1e-2):
     """Methods 3 & 4: Full-batch BCE Training extracting both checkpointing strategies."""
-    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
-    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -817,7 +817,7 @@ def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=C
                 plot_training_traces(pv_rand_histories, pv_bce_history, bce_history, name, config_results_dir)
 
                 # 5. Generate ROC Curve Plot with Feasible Region and Iso-performance Lines
-                x_val_jax = jnp.asarray(X_va, dtype=jnp.float32)
+                x_val_jax = jnp.asarray(X_va, dtype=jnp.float64)
                 pv_rand_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_rand_params["w"]) + pv_rand_params["b"])
                 bce_monitored_val_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, bce_monitored_params["w"]) + bce_monitored_params["b"])
                 pv_bce_init_preds = jax.nn.sigmoid(jnp.dot(x_val_jax, pv_bce_params["w"]) + pv_bce_params["b"])
@@ -833,7 +833,7 @@ def main(pca_dimensions=None, lr_candidates=None, wd_candidates=None, cv_folds=C
                 )
 
                 # 6. Evaluate TEST Set pVOROS metrics for ALL 4 METHODS
-                x_test_jax = jnp.asarray(X_te, dtype=jnp.float32)
+                x_test_jax = jnp.asarray(X_te, dtype=jnp.float64)
                 pv_rand_test_score = compute_pvoros_metric(pv_rand_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
                 pv_bce_test_score = compute_pvoros_metric(pv_bce_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
                 bce_std_test_score = compute_pvoros_metric(bce_std_params, x_test_jax, y_test, alpha, kappa_frac, min_fp, max_fp)
