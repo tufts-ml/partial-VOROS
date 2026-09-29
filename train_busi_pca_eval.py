@@ -22,7 +22,7 @@ import pandas as pd
 
 DATA_DIR = Path("busi_training/busi_embeddings")
 RESULTS_DIR = Path("busi_training/results")
-GRIDSEARCH_DIR = RESULTS_DIR / "gs_a0_k0.5_1-9_1-6"
+GRIDSEARCH_DIR = RESULTS_DIR / "replicate_results"
 
 VAL_FRACTION = 0.20
 TEST_FRACTION = 0.20

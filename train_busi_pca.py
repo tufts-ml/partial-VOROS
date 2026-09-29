@@ -131,8 +131,8 @@ def train_logreg_pv(
     inits_per_seed=10, 
     wd=1e-2):
     """Method 1: Full-batch Soft PV Loss from Random Initializations."""
-    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float32)
-    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float32)
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -239,8 +239,8 @@ def train_logreg_pv_from_bce_init(
     lr=1e-2, 
     wd=1e-2):
     """Method 2: Full-batch Soft PV Loss starting from BCE Initializer."""
-    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
-    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float64), jnp.asarray(y_train, dtype=jnp.float64)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float64), jnp.asarray(y_val, dtype=jnp.float64)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -261,8 +261,8 @@ def train_logreg_pv_from_bce_init(
         return optax.apply_updates(params, updates), opt_state, loss
 
     params = {
-        "w": jnp.asarray(bce_init_params["w"], dtype=jnp.float32),
-        "b": jnp.asarray(bce_init_params["b"], dtype=jnp.float32),
+        "w": jnp.asarray(bce_init_params["w"], dtype=jnp.float64),
+        "b": jnp.asarray(bce_init_params["b"], dtype=jnp.float64),
     }
     opt_state = optimizer.init(params)
 
@@ -433,7 +433,7 @@ def experiment():
 
             # 2 & 3. Methods 3 & 4: BCE Standard + BCE Monitored
             bce_std_params, _, bce_hist = train_baseline_bce_methods(
-                X_tr, y_tr, X_va, y_va, alpha, kappa_frac, min_fp, max_fp, epochs=epochs, lr=args.s
+                X_tr, y_tr, X_va, y_va, alpha, kappa_frac, min_fp, max_fp, epochs=epochs, lr=args.s, wd=args.w
             )
 
             # 4. Method 2: PV BCE Init
