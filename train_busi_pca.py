@@ -639,7 +639,7 @@ def tune_lr_with_cv(X, y, model_name, alpha, kappa_frac, min_fp, max_fp, target_
                     _, _, history = train_baseline_bce_methods(
                         X_tr, y_tr, X_va, y_va, alpha, kappa_frac, min_fp, max_fp, epochs=EPOCHS, lr=lr, weight_decay=wd
                     )
-                    score = history["best_val_pvoros"]
+                    score = -1*history["best_val_bce_loss"]
                 else:
                     raise ValueError(f"Unknown model_name: {model_name}")
 
@@ -683,8 +683,8 @@ FP_PAIRS = [
 
 CONSTRAINT_CONFIGS = [
     {"alpha": 0.4, "kappa_frac": 1.0},
-    {"alpha": 0.0, "kappa_frac": 0.5},
-    {"alpha": 0.4, "kappa_frac": 0.5},
+    # {"alpha": 0.0, "kappa_frac": 0.5},
+    # {"alpha": 0.4, "kappa_frac": 0.5},
 ]
 
 CONFIGS = [
