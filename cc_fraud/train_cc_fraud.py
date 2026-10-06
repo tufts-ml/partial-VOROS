@@ -241,6 +241,68 @@ def train_pvoros_loss(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, weig
     return best_params, best_val_pvoros, history
 
 
+def train_bce_val_pvoros(X_train, y_train, X_val, y_val, epochs=EPOCHS, lr=LR, weight_decay=WEIGHT_DECAY, seed=SPLIT_SEED, init_from=None, verbose=True):
+    """Full-batch BCE training, checkpointed on best val pVOROS (Model 6).
+    Same signature/returns as train_pvoros_loss so it plugs into tune_and_train_pvoros."""
+    x_tr, y_tr = jnp.asarray(X_train, dtype=jnp.float32), jnp.asarray(y_train, dtype=jnp.float32)
+    x_va, y_va = jnp.asarray(X_val, dtype=jnp.float32), jnp.asarray(y_val, dtype=jnp.float32)
+
+    optimizer = make_optimizer(lr, weight_decay)
+
+    if init_from is None:
+        key = jax.random.PRNGKey(seed)
+        params = init_params(key, x_tr.shape[1])
+    else:
+        params = {
+            "w": jnp.asarray(init_from["w"], dtype=jnp.float32),
+            "b": jnp.asarray(init_from["b"], dtype=jnp.float32),
+        }
+    opt_state = optimizer.init(params)
+
+    @jax.jit
+    def train_step(params, opt_state):
+        loss, grads = jax.value_and_grad(bce_loss_fn)(params, x_tr, y_tr)
+        updates, opt_state = optimizer.update(grads, opt_state, params=params)
+        params = optax.apply_updates(params, updates)
+        return params, opt_state, loss
+
+    best_params = params
+    best_val_pvoros = -float("inf")
+
+    train_losses, val_losses = [], []
+    train_pvoros_hist, val_pvoros_hist = [], []
+
+    for ep in range(1, epochs + 1):
+        params, opt_state, tr_loss = train_step(params, opt_state)
+        va_loss = float(bce_loss_fn(params, x_va, y_va))
+
+        train_losses.append(float(tr_loss))
+        val_losses.append(va_loss)
+
+        if ep % 10 == 0 or ep == 1:
+            tr_pv = compute_pvoros_metric(params, x_tr, y_train)
+            va_pv = compute_pvoros_metric(params, x_va, y_val)
+            train_pvoros_hist.append((ep, tr_pv))
+            val_pvoros_hist.append((ep, va_pv))
+
+            if va_pv > best_val_pvoros:
+                best_val_pvoros = va_pv
+                best_params = params
+
+            if verbose:
+                print(f"[BCE->valPV] Epoch {ep:3d} | train_bce={float(tr_loss):.4f} | val_bce={va_loss:.4f} | train_pv={tr_pv:.4f} | val_pv={va_pv:.4f}")
+
+    history = {
+        "train_losses": train_losses,
+        "val_losses": val_losses,
+        "train_pvoros": train_pvoros_hist,
+        "val_pvoros": val_pvoros_hist,
+    }
+    if verbose:
+        print(f"[BCE Track-Val-PVOROS] Best Val pVOROS: {best_val_pvoros:.4f}")
+    return best_params, best_val_pvoros, history
+
+
 # ---------------------------------------------------------------------------
 # 3. Learning-rate tuning (grid over LR_GRID x N_INITS random restarts)
 # ---------------------------------------------------------------------------
@@ -281,16 +343,19 @@ def tune_and_train_bce(X_train, y_train, X_val, y_val, lr_grid=LR_GRID, n_inits=
 
 
 def tune_and_train_pvoros(X_train, y_train, X_val, y_val, lr_grid=LR_GRID, n_inits=N_INITS,
-                           seed=SPLIT_SEED, init_from_by_idx=None, model_label="pvoros"):
-    """Grid-search LR for a pVOROS-loss run, independent of the BCE run's LR.
-    The winning LR is the one whose best-of-N-inits val pVOROS is highest."""
+                           seed=SPLIT_SEED, init_from_by_idx=None, model_label="pvoros",
+                           train_fn=train_pvoros_loss):
+    """Grid-search LR for a run checkpointed on val pVOROS (train_fn decides the
+    training loss), independent of the BCE run's LR. The winning LR is the one
+    whose best-of-N-inits val pVOROS is highest. Also returns each init's
+    checkpoint at that LR, keyed by init idx, for use as init_from_by_idx."""
     per_lr_runs = {}
     for lr in lr_grid:
         runs = []
         for init_idx in range(n_inits):
             init_seed = seed + init_idx
             init_from = None if init_from_by_idx is None else init_from_by_idx[init_idx]
-            params, val_pv, history = train_pvoros_loss(
+            params, val_pv, history = train_fn(
                 X_train, y_train, X_val, y_val, lr=lr, seed=init_seed, init_from=init_from, verbose=False
             )
             runs.append((init_idx, params, val_pv, history))
@@ -300,8 +365,9 @@ def tune_and_train_pvoros(X_train, y_train, X_val, y_val, lr_grid=LR_GRID, n_ini
 
     best_lr = max(lr_grid, key=lambda lr: max(r[2] for r in per_lr_runs[lr]))
     _, params, val_pv, history = max(per_lr_runs[best_lr], key=lambda r: r[2])
+    params_by_idx = {r[0]: r[1] for r in per_lr_runs[best_lr]}
     print(f"[{model_label}] Selected lr={best_lr:.0e} | val_pvoros={val_pv:.4f}")
-    return params, val_pv, history, best_lr
+    return params, val_pv, history, best_lr, params_by_idx
 
 
 # ---------------------------------------------------------------------------
@@ -337,11 +403,26 @@ def plot_model_traces(history, model_name, results_dir, loss_label="Loss"):
     print(f"Saved trace plot: {plot_path}")
 
 
-def plot_model_roc(y_test, y_pred, model_name, results_dir):
+def plot_model_roc(y_test, y_pred, model_name, results_dir, alpha=None, kappa_frac=None):
+    alpha = ALPHA if alpha is None else alpha
+    kappa_frac = KAPPA_FRAC if kappa_frac is None else kappa_frac
     fprs, tprs, _ = roc_curve(y_test, y_pred)
     auroc = roc_auc_score(y_test, y_pred)
 
+    # Same ROC-space bounds as pvoros_score: capacity TPR <= (kappa - N*FPR)/P,
+    # precision TPR >= alpha*N*FPR / ((1-alpha)*P).
+    y_test = np.asarray(y_test)
+    P, N = int(np.sum(y_test == 1)), int(np.sum(y_test == 0))
+    kappa = kappa_frac * len(y_test)
+    fpr_grid = np.linspace(0, 1, 2001)
+    cap_tpr = (kappa - N * fpr_grid) / P
+    prec_tpr = alpha * N * fpr_grid / ((1.0 - alpha) * P)
+
     fig, ax = plt.subplots(figsize=(6.5, 6.5))
+    ax.fill_between(fpr_grid, np.clip(prec_tpr, 0, 1), np.clip(cap_tpr, 0, 1),
+                    where=prec_tpr <= cap_tpr, color='#2ca02c', alpha=0.12, label='Feasible Region')
+    ax.plot(fpr_grid, cap_tpr, color='#ff7f0e', lw=1.8, label=f'Capacity (κ={kappa_frac:g}·n)')
+    ax.plot(fpr_grid, prec_tpr, color='#9467bd', lw=1.8, label=f'Precision (α={alpha:g})')
     ax.plot(fprs, tprs, color='#1f77b4', lw=2.5, label=f'ROC (AUROC={auroc:.4f})')
     ax.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=1.2, label='Chance Baseline')
     ax.set_xlim([-0.02, 1.02])
@@ -402,10 +483,12 @@ def main():
     # Each model is selected across a grid of LR_GRID x N_INITS random param
     # inits by its own checkpoint metric: lower val BCE loss for bce_baseline,
     # higher train pVOROS for bce_track_train_pvoros, higher val pVOROS for the
-    # two pVOROS-trained models. bce_baseline and bce_track_train_pvoros share
-    # one physical training run, so they share one tuned LR (chosen by
-    # bce_baseline's metric); pvoros and pvoros_from_bce_init each get their
-    # own independently tuned LR. The data split/scaler stay fixed at SPLIT_SEED.
+    # two pVOROS-trained models and bce_track_val_pvoros. bce_baseline and
+    # bce_track_train_pvoros share one physical training run, so they share one
+    # tuned LR (chosen by bce_baseline's metric); pvoros, bce_track_val_pvoros
+    # and pvoros_from_bce_init each get their own independently tuned LR.
+    # pvoros_from_bce_init starts each init from bce_track_val_pvoros's
+    # checkpoint for the same init idx. The data split/scaler stay fixed at SPLIT_SEED.
     print("\n" + "#" * 70)
     print("  Tuning shared BCE run (Models 1 & 5)")
     print("#" * 70)
@@ -416,17 +499,25 @@ def main():
     print("\n" + "#" * 70)
     print("  Tuning pVOROS run (Model 3, random init)")
     print("#" * 70)
-    pvoros_params, pvoros_val_pv, pvoros_history, pvoros_lr = tune_and_train_pvoros(
+    pvoros_params, pvoros_val_pv, pvoros_history, pvoros_lr, _ = tune_and_train_pvoros(
         X_train, y_train, X_val, y_val, model_label="pvoros"
     )
 
     print("\n" + "#" * 70)
-    print("  Tuning pVOROS run (Model 4, init from Model 1)")
+    print("  Tuning BCE run selected on val pVOROS (Model 6)")
     print("#" * 70)
-    pvoros_from_bce_init_params, pvoros_from_bce_val_pv, pvoros_from_bce_init_history, pvoros_from_bce_lr = (
+    (bce_val_pvoros_params, bce_val_pvoros_val_pv, bce_val_pvoros_history, bce_val_pvoros_lr,
+     bce_val_pvoros_params_by_idx) = tune_and_train_pvoros(
+        X_train, y_train, X_val, y_val, model_label="bce_track_val_pvoros", train_fn=train_bce_val_pvoros
+    )
+
+    print("\n" + "#" * 70)
+    print("  Tuning pVOROS run (Model 4, init from Model 6)")
+    print("#" * 70)
+    pvoros_from_bce_init_params, pvoros_from_bce_val_pv, pvoros_from_bce_init_history, pvoros_from_bce_lr, _ = (
         tune_and_train_pvoros(
             X_train, y_train, X_val, y_val,
-            init_from_by_idx=bce_result["init_bce_baseline_params_by_idx"],
+            init_from_by_idx=bce_val_pvoros_params_by_idx,
             model_label="pvoros_from_bce_init",
         )
     )
@@ -434,24 +525,28 @@ def main():
     best_scores = {
         "bce_baseline": bce_val_loss,
         "bce_track_train_pvoros": bce_train_pvoros,
+        "bce_track_val_pvoros": bce_val_pvoros_val_pv,
         "pvoros": pvoros_val_pv,
         "pvoros_from_bce_init": pvoros_from_bce_val_pv,
     }
     best_lrs = {
         "bce_baseline": bce_lr,
         "bce_track_train_pvoros": bce_lr,
+        "bce_track_val_pvoros": bce_val_pvoros_lr,
         "pvoros": pvoros_lr,
         "pvoros_from_bce_init": pvoros_from_bce_lr,
     }
     model_params = {
         "bce_baseline": bce_baseline_params,
         "bce_track_train_pvoros": bce_track_train_pvoros_params,
+        "bce_track_val_pvoros": bce_val_pvoros_params,
         "pvoros": pvoros_params,
         "pvoros_from_bce_init": pvoros_from_bce_init_params,
     }
     model_history = {
         "bce_baseline": bce_baseline_history,
         "bce_track_train_pvoros": bce_track_history,
+        "bce_track_val_pvoros": bce_val_pvoros_history,
         "pvoros": pvoros_history,
         "pvoros_from_bce_init": pvoros_from_bce_init_history,
     }
@@ -464,6 +559,7 @@ def main():
 
     plot_model_traces(model_history["bce_baseline"], "bce_baseline", results_dir, loss_label="BCE Loss")
     plot_model_traces(model_history["bce_track_train_pvoros"], "bce_track_train_pvoros", results_dir, loss_label="BCE Loss")
+    plot_model_traces(model_history["bce_track_val_pvoros"], "bce_track_val_pvoros", results_dir, loss_label="BCE Loss")
     plot_model_traces(model_history["pvoros"], "pvoros", results_dir, loss_label="Soft PV Loss")
     plot_model_traces(model_history["pvoros_from_bce_init"], "pvoros_from_bce_init", results_dir, loss_label="Soft PV Loss")
 
